@@ -1,46 +1,66 @@
 #!/usr/bin/env bash
 # Usage:
 #   From the web:  curl -fsSL https://raw.githubusercontent.com/rdkal/nexus/main/install.sh | bash -s -- <config-url>
-#   Development:   ./install.sh <config-url>
+#   Development:   ./install.sh [--home <dir>] <config-url>
 set -euo pipefail
 
-NEXUS_HOME="${NEXUS_HOME:-$HOME/.nexus}"
 NEXUS_REPO="https://github.com/rdkal/nexus"
 
 usage() {
-    echo "Usage: $0 <config-url>"
+    echo "Usage: $0 [--home <dir>] <config-url>"
     echo ""
-    echo "  config-url  URL to a nexus.yaml file, or a git repo URL containing nexus.yaml"
-    echo ""
-    echo "Examples:"
-    echo "  $0 https://raw.githubusercontent.com/org/repo/main/nexus.yaml"
-    echo "  $0 https://github.com/org/config-repo"
-    echo ""
-    echo "Environment:"
-    echo "  NEXUS_HOME  Installation directory (default: ~/.nexus)"
+    echo "  --home <dir>  Installation directory (default: ~/.nexus)"
+    echo "  config-url    Local path to .yaml, URL to .yaml, or git repo containing nexus.yaml"
     exit 1
 }
 
-[[ $# -lt 1 ]] && usage
-CONFIG_URL="$1"
+# ── argument parsing ──────────────────────────────────────────────────────────
+NEXUS_HOME="${NEXUS_HOME:-$HOME/.nexus}"
+CONFIG_URL=""
 
-# ── dependency check ──────────────────────────────────────────────────────────
-echo "Checking dependencies..."
-MISSING=()
-for dep in git uv process-compose; do
-    command -v "$dep" &>/dev/null || MISSING+=("$dep")
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --home|-H) [[ $# -lt 2 ]] && usage; NEXUS_HOME="$2"; shift 2 ;;
+        --help|-h) usage ;;
+        *) CONFIG_URL="$1"; shift ;;
+    esac
 done
-if [[ ${#MISSING[@]} -gt 0 ]]; then
-    echo "Missing required tools: ${MISSING[*]}"
-    echo ""
-    echo "Install guides:"
-    echo "  uv:              curl -LsSf https://astral.sh/uv/install.sh | sh"
-    echo "  process-compose: https://github.com/F1bonacc1/process-compose/releases"
-    exit 1
-fi
+
+[[ -z "$CONFIG_URL" ]] && usage
+
+# ── dependency bootstrap ──────────────────────────────────────────────────────
+ensure_uv() {
+    command -v uv &>/dev/null && return
+    echo "Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+    command -v uv &>/dev/null || { echo "uv install failed"; exit 1; }
+}
+
+ensure_process_compose() {
+    command -v process-compose &>/dev/null && return
+    echo "Installing process-compose..."
+    local os_name arch install_dir
+    os_name="$(uname -s | tr '[:upper:]' '[:lower:]')"
+    case "$(uname -m)" in
+        x86_64)         arch="amd64" ;;
+        aarch64|arm64)  arch="arm64" ;;
+        *) echo "Unsupported arch: $(uname -m)"; exit 1 ;;
+    esac
+    install_dir="${HOME}/.local/bin"
+    mkdir -p "$install_dir"
+    local url="https://github.com/F1bonacc1/process-compose/releases/latest/download/process-compose_${os_name}_${arch}.tar.gz"
+    curl -fsSL "$url" | tar -xz -C "$install_dir" process-compose
+    chmod +x "$install_dir/process-compose"
+    export PATH="$install_dir:$PATH"
+    command -v process-compose &>/dev/null || { echo "process-compose install failed"; exit 1; }
+}
+
+echo "Checking dependencies..."
+ensure_uv
+ensure_process_compose
 
 # ── nexus source ──────────────────────────────────────────────────────────────
-# Dev mode: if this script lives in the nexus repo, use it directly.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || pwd)"
 if [[ -f "$SCRIPT_DIR/pyproject.toml" ]] && grep -q 'name = "nexus"' "$SCRIPT_DIR/pyproject.toml"; then
     NEXUS_SRC="$SCRIPT_DIR"
@@ -65,21 +85,18 @@ mkdir -p "$NEXUS_HOME/apps"
 CONFIG_FILE="$NEXUS_HOME/config.yaml"
 
 echo "Fetching config from $CONFIG_URL..."
-if [[ "$CONFIG_URL" == *.yaml || "$CONFIG_URL" == *.yml ]]; then
-    # Direct URL to a YAML file
+if [[ -f "$CONFIG_URL" ]]; then
+    cp "$CONFIG_URL" "$CONFIG_FILE"
+elif [[ "$CONFIG_URL" == *.yaml || "$CONFIG_URL" == *.yml ]]; then
     curl -fsSL "$CONFIG_URL" -o "$CONFIG_FILE"
 else
-    # Git repo containing nexus.yaml
     CONFIG_REPO="$NEXUS_HOME/config"
     if [[ -d "$CONFIG_REPO/.git" ]]; then
         git -C "$CONFIG_REPO" pull --quiet
     else
         git clone --quiet "$CONFIG_URL" "$CONFIG_REPO"
     fi
-    if [[ ! -f "$CONFIG_REPO/nexus.yaml" ]]; then
-        echo "Error: nexus.yaml not found in config repo root"
-        exit 1
-    fi
+    [[ -f "$CONFIG_REPO/nexus.yaml" ]] || { echo "Error: nexus.yaml not found in config repo root"; exit 1; }
     cp "$CONFIG_REPO/nexus.yaml" "$CONFIG_FILE"
 fi
 

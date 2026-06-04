@@ -42,7 +42,6 @@ def fetch_origin(repo_dir: Path) -> None:
 
 
 def prepare_staging(active_dir: Path, staging_dir: Path, branch: str) -> None:
-    """Create a worktree at staging_dir with the latest origin/branch."""
     _remove_worktree(active_dir, staging_dir)
     subprocess.run(
         ["git", "-C", str(active_dir), "worktree", "add",
@@ -78,14 +77,12 @@ def run_deploy_flow(staging_dir: Path, app_name: str) -> bool:
 
     print(f"[poller] Running deploy flow for {app_name}...")
 
-    sync = subprocess.run(["uv", "sync"], cwd=str(staging_dir))
-    if sync.returncode != 0:
+    if subprocess.run(["uv", "sync"], cwd=str(staging_dir)).returncode != 0:
         print(f"[poller] uv sync failed in staging for {app_name}")
         return False
 
     env = os.environ.copy()
     env["PREFECT_API_URL"] = PREFECT_API_URL
-
     result = subprocess.run(
         ["uv", "run", "python", "nexus_deploy.py"],
         cwd=str(staging_dir),
@@ -95,9 +92,9 @@ def run_deploy_flow(staging_dir: Path, app_name: str) -> bool:
     if result.returncode == 0:
         print(f"[poller] Deploy flow passed for {app_name}")
         return True
-    else:
-        print(f"[poller] Deploy flow FAILED for {app_name} — keeping current version")
-        return False
+
+    print(f"[poller] Deploy flow FAILED for {app_name} — keeping current version")
+    return False
 
 
 # ── process-compose API ───────────────────────────────────────────────────────
@@ -106,21 +103,25 @@ def app_processes(app_name: str) -> list[str]:
     try:
         resp = httpx.get(f"{PC_BASE}/processes", timeout=5)
         resp.raise_for_status()
-        return [p["name"] for p in resp.json() if p["name"].startswith(f"{app_name}-")]
+        return [
+            p["name"]
+            for p in resp.json().get("data", [])
+            if p["name"].startswith(f"{app_name}-")
+        ]
     except Exception:
         return []
 
 
 def stop_process(name: str) -> None:
     try:
-        httpx.post(f"{PC_BASE}/process/stop", json={"name": name}, timeout=10)
+        httpx.patch(f"{PC_BASE}/process/stop/{name}", timeout=10)
     except Exception as e:
         print(f"[poller] Failed to stop {name}: {e}")
 
 
 def start_process(name: str) -> None:
     try:
-        httpx.post(f"{PC_BASE}/process/start", json={"name": name}, timeout=10)
+        httpx.post(f"{PC_BASE}/process/start/{name}", timeout=10)
     except Exception as e:
         print(f"[poller] Failed to start {name}: {e}")
 
@@ -128,7 +129,6 @@ def start_process(name: str) -> None:
 # ── update orchestration ──────────────────────────────────────────────────────
 
 def update_app(app: AppConfig) -> bool:
-    """Full deploy pipeline for one app. Returns True on success."""
     active_dir = NEXUS_HOME / "apps" / app.name
     staging_dir = NEXUS_HOME / "apps" / f"{app.name}.next"
 
@@ -149,7 +149,6 @@ def update_app(app: AppConfig) -> bool:
             stop_process(proc)
 
         time.sleep(2)
-
         apply_update(active_dir, app.branch)
 
         for proc in processes:
