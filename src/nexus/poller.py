@@ -1,18 +1,22 @@
-"""Poll app git repos and restart processes when changes are detected."""
+"""Poll app git repos and run deploy flows before restarting processes."""
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
 
 import httpx
 
-from nexus.config import load_config
+from nexus.config import AppConfig, load_config
 
 NEXUS_HOME = Path(os.environ.get("NEXUS_HOME", Path.home() / ".nexus"))
 DEFAULT_POLL_INTERVAL = int(os.environ.get("NEXUS_POLL_INTERVAL", 60))
 PC_PORT = int(os.environ.get("PROCESS_COMPOSE_PORT", 9080))
 PC_BASE = f"http://localhost:{PC_PORT}"
+PREFECT_API_URL = os.environ.get("PREFECT_API_URL", "http://localhost:4200/api")
 
+
+# ── git helpers ───────────────────────────────────────────────────────────────
 
 def remote_head(repo_dir: Path, branch: str) -> str:
     result = subprocess.run(
@@ -32,6 +36,71 @@ def local_head(repo_dir: Path) -> str:
     )
     return result.stdout.strip()
 
+
+def fetch_origin(repo_dir: Path) -> None:
+    subprocess.run(["git", "-C", str(repo_dir), "fetch", "origin"], check=True)
+
+
+def prepare_staging(active_dir: Path, staging_dir: Path, branch: str) -> None:
+    """Create a worktree at staging_dir with the latest origin/branch."""
+    _remove_worktree(active_dir, staging_dir)
+    subprocess.run(
+        ["git", "-C", str(active_dir), "worktree", "add",
+         str(staging_dir), f"origin/{branch}"],
+        check=True,
+    )
+
+
+def _remove_worktree(active_dir: Path, staging_dir: Path) -> None:
+    subprocess.run(
+        ["git", "-C", str(active_dir), "worktree", "remove", "--force", str(staging_dir)],
+        capture_output=True,
+    )
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir, ignore_errors=True)
+
+
+def apply_update(active_dir: Path, branch: str) -> None:
+    subprocess.run(
+        ["git", "-C", str(active_dir), "reset", "--hard", f"origin/{branch}"],
+        check=True,
+    )
+    subprocess.run(["uv", "sync"], cwd=str(active_dir), check=True)
+
+
+# ── deploy flow ───────────────────────────────────────────────────────────────
+
+def run_deploy_flow(staging_dir: Path, app_name: str) -> bool:
+    """Run nexus_deploy.py in staging if present. Returns True if deploy should proceed."""
+    deploy_script = staging_dir / "nexus_deploy.py"
+    if not deploy_script.exists():
+        return True
+
+    print(f"[poller] Running deploy flow for {app_name}...")
+
+    sync = subprocess.run(["uv", "sync"], cwd=str(staging_dir))
+    if sync.returncode != 0:
+        print(f"[poller] uv sync failed in staging for {app_name}")
+        return False
+
+    env = os.environ.copy()
+    env["PREFECT_API_URL"] = PREFECT_API_URL
+
+    result = subprocess.run(
+        ["uv", "run", "python", "nexus_deploy.py"],
+        cwd=str(staging_dir),
+        env=env,
+    )
+
+    if result.returncode == 0:
+        print(f"[poller] Deploy flow passed for {app_name}")
+        return True
+    else:
+        print(f"[poller] Deploy flow FAILED for {app_name} — keeping current version")
+        return False
+
+
+# ── process-compose API ───────────────────────────────────────────────────────
 
 def app_processes(app_name: str) -> list[str]:
     try:
@@ -56,27 +125,48 @@ def start_process(name: str) -> None:
         print(f"[poller] Failed to start {name}: {e}")
 
 
-def update_app(app_name: str, repo_dir: Path, branch: str) -> None:
-    print(f"[poller] Updating {app_name}...")
-    processes = app_processes(app_name)
+# ── update orchestration ──────────────────────────────────────────────────────
 
-    for proc in processes:
-        print(f"[poller]   stop {proc}")
-        stop_process(proc)
+def update_app(app: AppConfig) -> bool:
+    """Full deploy pipeline for one app. Returns True on success."""
+    active_dir = NEXUS_HOME / "apps" / app.name
+    staging_dir = NEXUS_HOME / "apps" / f"{app.name}.next"
 
-    time.sleep(2)
+    if not active_dir.exists():
+        return False
 
-    subprocess.run(
-        ["git", "-C", str(repo_dir), "pull", "origin", branch],
-        check=True,
-    )
+    try:
+        fetch_origin(active_dir)
+        prepare_staging(active_dir, staging_dir, app.branch)
 
-    for proc in processes:
-        print(f"[poller]   start {proc}")
-        start_process(proc)
+        if not run_deploy_flow(staging_dir, app.name):
+            _remove_worktree(active_dir, staging_dir)
+            return False
 
-    print(f"[poller] {app_name} updated")
+        processes = app_processes(app.name)
+        for proc in processes:
+            print(f"[poller]   stop {proc}")
+            stop_process(proc)
 
+        time.sleep(2)
+
+        apply_update(active_dir, app.branch)
+
+        for proc in processes:
+            print(f"[poller]   start {proc}")
+            start_process(proc)
+
+        _remove_worktree(active_dir, staging_dir)
+        print(f"[poller] {app.name} deployed")
+        return True
+
+    except Exception as e:
+        print(f"[poller] Error deploying {app.name}: {e}")
+        _remove_worktree(active_dir, staging_dir)
+        return False
+
+
+# ── main loop ─────────────────────────────────────────────────────────────────
 
 def main():
     config_file = NEXUS_HOME / "config.yaml"
@@ -93,15 +183,17 @@ def main():
             continue
 
         for app in config.apps:
-            repo_dir = NEXUS_HOME / "apps" / app.name
-            if not repo_dir.exists():
+            active_dir = NEXUS_HOME / "apps" / app.name
+            if not active_dir.exists():
                 continue
             try:
-                rhead = remote_head(repo_dir, app.branch)
-                lhead = known.get(app.name) or local_head(repo_dir)
+                rhead = remote_head(active_dir, app.branch)
+                lhead = known.get(app.name) or local_head(active_dir)
+
                 if rhead and rhead != lhead:
-                    update_app(app.name, repo_dir, app.branch)
-                    known[app.name] = rhead
+                    print(f"[poller] Change in {app.name}: {lhead[:8]} → {rhead[:8]}")
+                    if update_app(app):
+                        known[app.name] = rhead
                 else:
                     known[app.name] = lhead
             except Exception as e:

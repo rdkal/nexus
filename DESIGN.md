@@ -119,27 +119,77 @@ Every process inherits these from the environment nexus starts with:
 
 ---
 
-## Git Polling (Update Flow)
+## Git Polling & Deploy Flow
 
-1. Poller reads `config.yaml` each cycle (picks up config changes without restart)
-2. For each app: `git ls-remote origin` to get current remote HEAD
-3. If remote HEAD ≠ local HEAD:
-   a. Query process-compose API for processes prefixed `<app-name>-`
-   b. Stop each one via `POST /process/stop`
-   c. `git pull origin <branch>` in the app dir
-   d. Start each one via `POST /process/start`
-4. Sleep for `poll_interval` seconds
+1. Poller reads `config.yaml` each cycle (picks up new apps without restart)
+2. For each app: `git ls-remote origin` to check remote HEAD
+3. If remote HEAD ≠ local HEAD, trigger the deploy pipeline:
+
+### Deploy Pipeline
+
+```
+git fetch origin
+git worktree add apps/<app>.next origin/<branch>
+uv sync  (in staging dir)
+          │
+          ▼
+  nexus_deploy.py exists?
+  ┌───────yes──────────────────────────────────────┐
+  │  Run nexus_deploy.py as a Prefect flow         │
+  │  (visible in Prefect UI under app's flows)     │
+  │                                                │
+  │  flow fails ──► remove worktree                │
+  │                 keep current running   ◄───────┘
+  │  flow passes ──► proceed to swap
+  └────────no──────► proceed to swap (auto-deploy)
+
+swap:
+  stop app's process-compose processes
+  git reset --hard origin/<branch>  (in active dir)
+  uv sync  (in active dir)
+  start app's processes
+  git worktree remove apps/<app>.next
+```
+
+The running processes are only stopped for the `git reset` + `uv sync` window.
+The staging worktree lets the deploy flow run in isolation against the new code
+without touching the running version.
+
+### App Deploy Flow Convention
+
+Apps opt in by placing `nexus_deploy.py` in their repo root:
+
+```python
+# nexus_deploy.py
+from prefect import flow, task
+import subprocess
+
+@task
+def lint():
+    subprocess.run(["uv", "run", "ruff", "check", "."], check=True)
+
+@task
+def test():
+    subprocess.run(["uv", "run", "pytest"], check=True)
+
+@flow(name="nexus-deploy")
+def deploy():
+    lint()
+    test()
+    # returning normally = all clear, nexus proceeds with the swap
+    # raising an exception = abort, keep current version running
+```
+
+`PREFECT_API_URL` is injected so the flow run appears in the Prefect UI.
+The working directory is set to the staging dir, so relative paths work.
 
 ---
 
 ## Prefect Flows
 
-Apps define Prefect flows normally in their Python code. To register them with the
-nexus Prefect server, apps should include a deployment step in their process-compose
-(e.g. a one-shot `app1-deploy` process that runs `prefect deploy`).
-
-Since all apps share one Prefect server, flows from different apps can reference each
-other by deployment name. The `PREFECT_API_URL` env var points every app at the same server.
+Apps define Prefect flows in their Python code. Since all apps share one Prefect
+server, flows from different apps can reference each other by deployment name.
+The `PREFECT_API_URL` env var points every process at the same server.
 
 ---
 
@@ -172,7 +222,6 @@ nexus repo:
 ## What's Not Covered Yet
 
 - Startup on boot (systemd unit / launchd plist)
-- HTTPS / auth
 - Prefect flow auto-registration on deploy
 - Cross-app flow references (works naturally via shared Prefect server)
 - Config file hot-reload (poller already re-reads config each cycle)
