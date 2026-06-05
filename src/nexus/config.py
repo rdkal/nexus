@@ -70,5 +70,5 @@ def load_config(path: Path) -> NexusConfig:
         includes=includes,
         flows={k: _parse_flow(v) for k, v in data.get("flows", {}).items()},
         processes={k: _parse_process(v) for k, v in data.get("processes", {}).items()},
-        deploy=data.get("deploy", []),
+        deploy=data.get("deploy") or [],
     )

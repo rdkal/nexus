@@ -3,6 +3,7 @@ import signal
 import socket
 import subprocess
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,161 @@ REPO_ROOT = Path(__file__).parent.parent
 INSTALL_SH = REPO_ROOT / "install.sh"
 FIXTURES = Path(__file__).parent / "fixtures"
 
+# Git identity injected into every git subprocess so commits work without
+# a global ~/.gitconfig in CI.
+GIT_ENV = {
+    **os.environ,
+    "GIT_AUTHOR_NAME": "nexus-test",
+    "GIT_AUTHOR_EMAIL": "test@nexus.local",
+    "GIT_COMMITTER_NAME": "nexus-test",
+    "GIT_COMMITTER_EMAIL": "test@nexus.local",
+}
+
+
+# ── git helpers ───────────────────────────────────────────────────────────────
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(cwd), *args],
+                   check=True, env=GIT_ENV, capture_output=True)
+
+
+def _git_out(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(cwd), *args],
+        check=True, env=GIT_ENV, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+# ── LocalApp — a fake app repo with a local bare remote ──────────────────────
+
+@dataclass
+class LocalApp:
+    """
+    A local git app wired up so nexus can work with it:
+      bare/    — the bare remote (acts as origin)
+      active/  — nexus's working clone (NEXUS_HOME/apps/<name>)
+      _scratch/ — a separate clone for making test commits
+    """
+    name: str
+    bare: Path
+    active: Path
+    _scratch: Path
+
+    def push_update(self, files: dict[str, str], message: str = "update") -> str:
+        """Write files into scratch, commit, push to bare. Returns new SHA."""
+        for rel, content in files.items():
+            p = self._scratch / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content)
+        _git(self._scratch, "add", ".")
+        _git(self._scratch, "commit", "-m", message)
+        _git(self._scratch, "push")
+        return _git_out(self._scratch, "rev-parse", "HEAD")
+
+    def active_sha(self) -> str:
+        return _git_out(self.active, "rev-parse", "HEAD")
+
+    def remote_sha(self) -> str:
+        return _git_out(self.bare, "rev-parse", "HEAD")
+
+
+_DEFAULT_NEXUS_YAML = "flows:\n  hello: flows/hello.py:run\n"
+_DEFAULT_FLOW_PY = (
+    "from prefect import flow\n\n"
+    "@flow\ndef run(): pass\n"
+)
+_MINIMAL_PYPROJECT = (
+    '[project]\nname = "test-app"\nversion = "0.1.0"\n'
+    'requires-python = ">=3.11"\n'
+)
+
+
+@pytest.fixture
+def nexus_home(tmp_path):
+    """Function-scoped empty nexus home directory."""
+    home = tmp_path / "nexus_home"
+    (home / "apps").mkdir(parents=True)
+    (home / "config.yaml").write_text("project: test\n")
+    return home
+
+
+@pytest.fixture
+def make_app(tmp_path, nexus_home):
+    """
+    Factory fixture — call it once per app you need in a test.
+
+    Usage::
+        def test_something(make_app):
+            app = make_app("myapp")
+            app = make_app("myapp", nexus_yaml="processes:\\n  web: pc.yaml\\n")
+    """
+    def _make(name: str, nexus_yaml: str = _DEFAULT_NEXUS_YAML) -> LocalApp:
+        bare = tmp_path / f"{name}.git"
+        scratch = tmp_path / f"{name}-scratch"
+        active = nexus_home / "apps" / name
+
+        # Init bare repo with main as default branch
+        subprocess.run(["git", "init", "--bare", str(bare)],
+                       check=True, env=GIT_ENV, capture_output=True)
+        _git(bare, "symbolic-ref", "HEAD", "refs/heads/main")
+
+        # Seed via scratch clone
+        subprocess.run(["git", "clone", str(bare), str(scratch)],
+                       check=True, env=GIT_ENV, capture_output=True)
+
+        (scratch / "nexus.yaml").write_text(nexus_yaml)
+        (scratch / "flows").mkdir(exist_ok=True)
+        (scratch / "flows" / "hello.py").write_text(_DEFAULT_FLOW_PY)
+        (scratch / "pyproject.toml").write_text(_MINIMAL_PYPROJECT)
+
+        _git(scratch, "add", ".")
+        _git(scratch, "commit", "-m", "init")
+        _git(scratch, "push", "--set-upstream", "origin", "main")
+
+        # Active clone — mirrors what setup.py does
+        subprocess.run(["git", "clone", str(bare), str(active)],
+                       check=True, env=GIT_ENV, capture_output=True)
+
+        return LocalApp(name=name, bare=bare, active=active, _scratch=scratch)
+
+    return _make
+
+
+# ── FakeProcessCompose — intercepts poller's stop/start calls ─────────────────
+
+@dataclass
+class FakeProcessCompose:
+    processes: list[str] = field(default_factory=list)
+    stopped: list[str] = field(default_factory=list)
+    started: list[str] = field(default_factory=list)
+
+
+@pytest.fixture
+def fake_process_compose(monkeypatch):
+    """
+    Replaces the three process-compose API functions in poller with in-memory
+    fakes. Prepopulate `fake.processes` with names the poller should see.
+    """
+    import nexus.poller as poller_mod
+
+    fake = FakeProcessCompose()
+
+    monkeypatch.setattr(
+        poller_mod, "app_processes",
+        lambda name: [p for p in fake.processes if p.startswith(f"{name}-")],
+    )
+    monkeypatch.setattr(
+        poller_mod, "stop_process",
+        lambda name: fake.stopped.append(name),
+    )
+    monkeypatch.setattr(
+        poller_mod, "start_process",
+        lambda name: fake.started.append(name),
+    )
+    return fake
+
+
+# ── E2E fixture — runs the full install.sh and waits for port 8080 ────────────
 
 def _port_open(port: int, timeout: float = 1.0) -> bool:
     try:
@@ -43,30 +199,30 @@ def _kill_group(proc: subprocess.Popen) -> None:
 
 
 @pytest.fixture(scope="session")
-def nexus_home(tmp_path_factory):
-    return tmp_path_factory.mktemp("nexus_home")
-
-
-@pytest.fixture(scope="session")
-def running_nexus(nexus_home):
+def running_nexus(tmp_path_factory):
+    """
+    Session fixture: runs install.sh with an empty config (no apps) and waits
+    for nexus-web on port 8080. process-compose is auto-installed by install.sh
+    if not already present.
+    """
+    home = tmp_path_factory.mktemp("e2e")
     config_file = FIXTURES / "nexus.yaml"
-    log_file = nexus_home / "install.log"
+    log_file = home / "install.log"
 
     with open(log_file, "w") as log:
         proc = subprocess.Popen(
-            ["bash", str(INSTALL_SH), "--home", str(nexus_home), str(config_file)],
+            ["bash", str(INSTALL_SH), "--home", str(home), str(config_file)],
             start_new_session=True,
             stdout=log,
             stderr=subprocess.STDOUT,
         )
 
-    # nexus-web has no depends_on so it starts right away; allow 60s
     deadline = time.monotonic() + 60
     if not _wait_for_port(8080, deadline):
         output = log_file.read_text(errors="replace")
         _kill_group(proc)
         pytest.fail(f"Nexus web server did not start within 60s.\n\n{output}")
 
-    yield nexus_home
+    yield home
 
     _kill_group(proc)

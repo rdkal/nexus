@@ -160,9 +160,9 @@ def start_process(name: str) -> None:
 
 # ── update orchestration ──────────────────────────────────────────────────────
 
-def update_app(inc: IncludeConfig) -> bool:
-    active_dir = NEXUS_HOME / "apps" / inc.name
-    staging_dir = NEXUS_HOME / "apps" / f"{inc.name}.next"
+def update_app(inc: IncludeConfig, nexus_home: Path = NEXUS_HOME) -> bool:
+    active_dir = nexus_home / "apps" / inc.name
+    staging_dir = nexus_home / "apps" / f"{inc.name}.next"
 
     if not active_dir.exists():
         return False
