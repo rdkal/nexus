@@ -50,7 +50,7 @@ Status legend: ✅ Done · ⚠️ Partial · ❌ Not done
 | Root deploy gates pass → deploy proceeds | ✅ | ✅ | ✅ |
 | Root deploy gate fails → deploy aborted, current version kept | ✅ | ✅ | ✅ |
 | Per-process deploy gates | ✅ | ✅ | ✅ |
-| Per-flow deploy gates | ✅ | ✅ | ❌ |
+| Per-flow deploy gates | ✅ | ✅ | ✅ |
 | Unknown gate name aborts deploy | ✅ | ✅ | ✅ |
 | Process stop → git reset → uv sync → process start | ✅ | ✅ | ✅ |
 | Flows-only app (skip process stop/start) | ✅ | ✅ | ✅ |
