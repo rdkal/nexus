@@ -74,4 +74,17 @@ Apps may have only `flows`, only `processes`, or both. Apps must have a `nexus.y
 
 ## Testing
 
-Tests in `tests/test_install.py` are integration tests. The session fixture in `conftest.py` runs `install.sh` against `tests/fixtures/nexus.yaml` (no apps, no git cloning) and waits for port 8080. `nexus-web` has no `depends_on` so it starts immediately — tests finish in ~5s without waiting for Prefect.
+- `tests/test_config.py` — unit tests for nexus.yaml parsing; no filesystem or subprocesses
+- `tests/test_setup.py` — integration tests for `clone_or_update` using local bare git repos
+- `tests/test_poller.py` — integration tests for change detection and the deploy pipeline
+
+`tests/conftest.py` provides:
+- `make_app(name, nexus_yaml)` — factory that wires up a bare remote + scratch clone + active clone locally so git push/fetch work without a network
+- `nexus_home` — a temporary `$NEXUS_HOME` directory
+- `fake_process_compose` — monkeypatches `app_processes`, `stop_process`, `start_process` in `poller` with in-memory fakes
+
+The `running_nexus` session fixture in `conftest.py` runs `install.sh` against `tests/fixtures/nexus.yaml` and waits for port 8080 — use it for E2E tests. `nexus-web` has no `depends_on` so it starts immediately (~5s).
+
+## TODO.md
+
+`TODO.md` tracks every feature with three status columns: **Designed**, **Implemented**, **Tested**. Keep it up to date whenever you implement or test something — it is the source of truth for what's done.
