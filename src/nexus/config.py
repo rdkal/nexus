@@ -12,11 +12,42 @@ class IncludeConfig:
 
 
 @dataclass
+class FlowConfig:
+    entrypoint: str                                    # file:function
+    deploy: list[str] = field(default_factory=list)   # gate flow names
+
+
+@dataclass
+class ProcessConfig:
+    file: str                                          # compose file path
+    deploy: list[str] = field(default_factory=list)   # gate flow names
+
+
+@dataclass
 class NexusConfig:
     project: str | None
     includes: list[IncludeConfig]
-    flows: dict[str, str]       # name → file:function entrypoint
-    processes: dict[str, str]   # name → compose file path
+    flows: dict[str, FlowConfig]
+    processes: dict[str, ProcessConfig]
+    deploy: list[str] = field(default_factory=list)   # root gates (flow names)
+
+
+def _parse_flow(val: str | dict) -> FlowConfig:
+    if isinstance(val, str):
+        return FlowConfig(entrypoint=val)
+    return FlowConfig(
+        entrypoint=val["entrypoint"],
+        deploy=val.get("deploy", []),
+    )
+
+
+def _parse_process(val: str | dict) -> ProcessConfig:
+    if isinstance(val, str):
+        return ProcessConfig(file=val)
+    return ProcessConfig(
+        file=val["file"],
+        deploy=val.get("deploy", []),
+    )
 
 
 def load_config(path: Path) -> NexusConfig:
@@ -37,6 +68,7 @@ def load_config(path: Path) -> NexusConfig:
     return NexusConfig(
         project=data.get("project"),
         includes=includes,
-        flows=data.get("flows", {}),
-        processes=data.get("processes", {}),
+        flows={k: _parse_flow(v) for k, v in data.get("flows", {}).items()},
+        processes={k: _parse_process(v) for k, v in data.get("processes", {}).items()},
+        deploy=data.get("deploy", []),
     )

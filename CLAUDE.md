@@ -40,19 +40,32 @@ includes:
 **App** (inside app repo root as `nexus.yaml`):
 ```yaml
 # No 'project', no 'includes' — depth-1 only
+deploy:                                       # root gates: run before anything deploys
+  - run-tests
+
 flows:
-  ingest: src/flows/ingest.py:ingest_flow   # name → file:function
+  ingest: src/flows/ingest.py:ingest_flow   # shorthand: name → entrypoint
+  heavy-job:                                 # with per-flow gate
+    entrypoint: src/flows/heavy.py:heavy_job
+    deploy:
+      - integration-tests
+  run-tests: src/tests/run.py:run_all        # gate flows live here too
+
 processes:
-  web: process-compose.yaml                 # name → compose file path
+  web: process-compose.yaml                 # shorthand: name → compose file
+  jobs:                                      # with per-process gate
+    file: jobs-compose.yaml
+    deploy:
+      - run-tests
 ```
 
-Apps may have only `flows`, only `processes`, or both.
+Apps may have only `flows`, only `processes`, or both. Apps must have a `nexus.yaml`.
 
 ## Key Conventions
 
 **App process names** must be prefixed `<app-name>-` so the poller can identify which processes belong to which app.
 
-**App deploy flow** — optional `nexus_deploy.py` in app root with a `@flow(name="nexus-deploy")`. If it exits non-zero, deploy is aborted and the running version is kept.
+**Deploy gates** — any flow in the `flows` dict can be listed in a `deploy:` list (root, per-flow, or per-process). All gates run in a staging worktree before any processes are stopped or flows re-registered. A non-zero exit aborts the deploy and keeps the current version running.
 
 **process-compose API** (port 9080):
 - `GET /processes` → `{"data": [...]}`

@@ -67,18 +67,30 @@ processes:
 ```yaml
 # No 'project', no 'includes' — depth-1 only
 
+# Root deploy: gates that run once before anything in this app is deployed
+deploy:
+  - run-tests
+
 flows:
-  ingest: src/flows/ingest.py:ingest_flow     # name → file:function entrypoint
-  transform: src/flows/transform.py:transform
+  ingest: src/flows/ingest.py:ingest_flow     # shorthand: name → entrypoint
+  heavy-job:                                   # with extra per-flow gate
+    entrypoint: src/flows/heavy.py:heavy_job
+    deploy:
+      - integration-tests
+  run-tests: src/tests/run.py:run_all          # this flow is used as a gate
+  integration-tests: src/tests/integ.py:run
 
 processes:
-  web: process-compose.yaml                  # name → compose file path
-  jobs: jobs-compose.yaml
+  web: process-compose.yaml                    # shorthand: name → compose file
+  jobs:                                         # with extra per-process gate
+    file: jobs-compose.yaml
+    deploy:
+      - smoke-test
+  smoke-test: src/tests/smoke.py:smoke         # another gate flow (flows-only entry)
 ```
 
 Apps may have **only flows**, **only processes**, or **both**.
-An app with no `nexus.yaml` may still have a bare `process-compose.yaml` at its root
-(backward-compatible fallback).
+Apps must have a `nexus.yaml` — there is no bare `process-compose.yaml` fallback.
 
 ---
 
@@ -155,38 +167,36 @@ processes:
 ### Deploy Pipeline
 
 ```
-git fetch origin
-git worktree add apps/<app>.next origin/<branch>
-uv sync  (in staging dir)
+git fetch + worktree staging
+uv sync in staging
+load staging/nexus.yaml
           │
           ▼
-  nexus_deploy.py exists?
-  ┌───────yes──────────────────────────────────────┐
-  │  Run as a Prefect flow (visible in UI)         │
-  │  flow fails ──► remove worktree                │
-  │                 keep current running   ◄───────┘
-  │  flow passes ──► proceed to update
-  └────────no──────► proceed to update (auto-deploy)
-
-update:
-  if app has processes:
-    stop app's process-compose processes
-  git reset --hard origin/<branch>  (in active dir)
-  uv sync  (in active dir)
-  if app has processes:
-    start app's processes
-  git worktree remove apps/<app>.next
-  (log any declared flows for re-registration)
+  run root deploy gates       ← app.deploy: [flow-names]
+  run per-process gates        ← processes.<name>.deploy: [flow-names]
+  run per-flow gates           ← flows.<name>.deploy: [flow-names]
+          │
+    any fail? ──► remove staging, keep current running
+          │
+          ▼
+  stop process-compose processes  (skipped if app has no processes)
+  git reset --hard + uv sync in active dir
+  start process-compose processes
+  (re-register Prefect flows — TODO)
+  remove staging worktree
 ```
 
-Apps with **only flows** (no `processes`) are updated without any process stop/start.
+Gates run in the **staging worktree** against the new code, before anything is touched.
+Apps with only flows skip the process stop/start entirely.
 
-### App Deploy Hook Convention
+### Gate Flows
 
-Optional `nexus_deploy.py` in app root — a Prefect `@flow` that runs CI before deploy:
+Any flow declared in `flows` can be used as a gate by referencing its name in
+a `deploy` list. The poller executes gates via their `entrypoint` using `uv run python`.
+Since `PREFECT_API_URL` is injected, runs appear in the Prefect UI.
 
 ```python
-# nexus_deploy.py
+# src/tests/run.py
 from prefect import flow, task
 import subprocess
 
@@ -198,11 +208,11 @@ def lint():
 def test():
     subprocess.run(["uv", "run", "pytest"], check=True)
 
-@flow(name="nexus-deploy")
-def deploy():
+@flow
+def run_all():
     lint()
     test()
-    # returning normally → deploy proceeds; raising → deploy aborted
+    # normal return → gate passes; exception → gate fails, deploy aborted
 ```
 
 ---

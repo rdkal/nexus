@@ -1,4 +1,4 @@
-"""Poll included app repos and run deploy flows before restarting processes."""
+"""Poll included app repos and run deploy gates before updating."""
 import os
 import shutil
 import subprocess
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import httpx
 
-from nexus.config import IncludeConfig, NexusConfig, load_config
+from nexus.config import FlowConfig, IncludeConfig, NexusConfig, load_config
 
 NEXUS_HOME = Path(os.environ.get("NEXUS_HOME", Path.home() / ".nexus"))
 DEFAULT_POLL_INTERVAL = int(os.environ.get("NEXUS_POLL_INTERVAL", 60))
@@ -19,20 +19,20 @@ PREFECT_API_URL = os.environ.get("PREFECT_API_URL", "http://localhost:4200/api")
 # ── git helpers ───────────────────────────────────────────────────────────────
 
 def remote_head(repo_dir: Path, branch: str) -> str:
-    result = subprocess.run(
+    r = subprocess.run(
         ["git", "-C", str(repo_dir), "ls-remote", "origin", f"refs/heads/{branch}"],
         capture_output=True, text=True,
     )
-    parts = result.stdout.strip().split()
+    parts = r.stdout.strip().split()
     return parts[0] if parts else ""
 
 
 def local_head(repo_dir: Path) -> str:
-    result = subprocess.run(
+    r = subprocess.run(
         ["git", "-C", str(repo_dir), "rev-parse", "HEAD"],
         capture_output=True, text=True,
     )
-    return result.stdout.strip()
+    return r.stdout.strip()
 
 
 def fetch_origin(repo_dir: Path) -> None:
@@ -65,30 +65,68 @@ def apply_update(active_dir: Path, branch: str) -> None:
     subprocess.run(["uv", "sync"], cwd=str(active_dir), check=True)
 
 
-# ── deploy flow ───────────────────────────────────────────────────────────────
+# ── deploy gates ──────────────────────────────────────────────────────────────
 
-def run_deploy_flow(staging_dir: Path, app_name: str) -> bool:
-    deploy_script = staging_dir / "nexus_deploy.py"
-    if not deploy_script.exists():
-        return True
+def run_entrypoint(staging_dir: Path, entrypoint: str, env: dict) -> bool:
+    """Execute a flow by file:function entrypoint. Returns True on success."""
+    file_path, func_name = entrypoint.rsplit(":", 1)
+    code = (
+        "import sys; sys.path.insert(0, '.'); "
+        "import importlib.util; "
+        f"spec = importlib.util.spec_from_file_location('_flow', r'{file_path}'); "
+        "mod = importlib.util.module_from_spec(spec); "
+        "spec.loader.exec_module(mod); "
+        f"getattr(mod, '{func_name}')()"
+    )
+    return subprocess.run(
+        ["uv", "run", "python", "-c", code],
+        cwd=str(staging_dir),
+        env=env,
+    ).returncode == 0
 
-    print(f"[poller] Running deploy flow for {app_name}...")
-    if subprocess.run(["uv", "sync"], cwd=str(staging_dir)).returncode != 0:
-        print(f"[poller] uv sync failed in staging for {app_name}")
-        return False
 
+def run_gates(
+    staging_dir: Path,
+    gate_names: list[str],
+    all_flows: dict[str, FlowConfig],
+    label: str,
+    env: dict,
+) -> bool:
+    """Run named gate flows in order. Returns False on first failure."""
+    for name in gate_names:
+        if name not in all_flows:
+            print(f"[poller] Unknown gate flow '{name}' ({label})")
+            return False
+        print(f"[poller] Gate [{label}] → {name}")
+        if not run_entrypoint(staging_dir, all_flows[name].entrypoint, env):
+            print(f"[poller] Gate [{label}] '{name}' FAILED — aborting deploy")
+            return False
+    return True
+
+
+def all_gates_pass(staging_dir: Path, app_config: NexusConfig, app_name: str) -> bool:
+    """Run all deploy gates for an app in staging. All must pass."""
     env = os.environ.copy()
     env["PREFECT_API_URL"] = PREFECT_API_URL
-    result = subprocess.run(
-        ["uv", "run", "python", "nexus_deploy.py"],
-        cwd=str(staging_dir), env=env,
-    )
+    flows = app_config.flows
 
-    if result.returncode == 0:
-        print(f"[poller] Deploy flow passed for {app_name}")
-        return True
-    print(f"[poller] Deploy flow FAILED for {app_name} — keeping current version")
-    return False
+    # 1. Root gates
+    if not run_gates(staging_dir, app_config.deploy, flows, app_name, env):
+        return False
+
+    # 2. Per-process gates
+    for proc_name, proc in app_config.processes.items():
+        label = f"{app_name}/{proc_name}"
+        if not run_gates(staging_dir, proc.deploy, flows, label, env):
+            return False
+
+    # 3. Per-flow gates
+    for flow_name, flow in app_config.flows.items():
+        label = f"{app_name}/{flow_name}"
+        if not run_gates(staging_dir, flow.deploy, flows, label, env):
+            return False
+
+    return True
 
 
 # ── process-compose API ───────────────────────────────────────────────────────
@@ -120,22 +158,6 @@ def start_process(name: str) -> None:
         print(f"[poller] Failed to start {name}: {e}")
 
 
-# ── app config helpers ────────────────────────────────────────────────────────
-
-def app_nexus_config(active_dir: Path) -> NexusConfig | None:
-    nexus_yaml = active_dir / "nexus.yaml"
-    if nexus_yaml.exists():
-        return load_config(nexus_yaml)
-    return None
-
-
-def has_processes(app_config: NexusConfig | None, active_dir: Path) -> bool:
-    if app_config and app_config.processes:
-        return True
-    # Backward compat: bare process-compose.yaml with no nexus.yaml
-    return (active_dir / "process-compose.yaml").exists() and app_config is None
-
-
 # ── update orchestration ──────────────────────────────────────────────────────
 
 def update_app(inc: IncludeConfig) -> bool:
@@ -148,34 +170,39 @@ def update_app(inc: IncludeConfig) -> bool:
     try:
         fetch_origin(active_dir)
         prepare_staging(active_dir, staging_dir, inc.branch)
+        subprocess.run(["uv", "sync"], cwd=str(staging_dir), check=True)
 
-        if not run_deploy_flow(staging_dir, inc.name):
+        app_nexus = staging_dir / "nexus.yaml"
+        if not app_nexus.exists():
+            print(f"[poller] No nexus.yaml in {inc.name}, skipping")
             _remove_worktree(active_dir, staging_dir)
             return False
 
-        app_config = app_nexus_config(active_dir)
-        with_procs = has_processes(app_config, active_dir)
+        app_config = load_config(app_nexus)
 
-        if with_procs:
-            processes = app_processes(inc.name)
-            for proc in processes:
-                print(f"[poller]   stop {proc}")
-                stop_process(proc)
+        if not all_gates_pass(staging_dir, app_config, inc.name):
+            _remove_worktree(active_dir, staging_dir)
+            return False
+
+        with_procs = bool(app_config.processes)
+        processes = app_processes(inc.name) if with_procs else []
+
+        for proc in processes:
+            print(f"[poller]   stop {proc}")
+            stop_process(proc)
+        if processes:
             time.sleep(2)
 
         apply_update(active_dir, inc.branch)
 
-        if with_procs:
-            processes = app_processes(inc.name)
-            for proc in processes:
-                print(f"[poller]   start {proc}")
-                start_process(proc)
+        for proc in processes:
+            print(f"[poller]   start {proc}")
+            start_process(proc)
 
         _remove_worktree(active_dir, staging_dir)
 
-        if app_config and app_config.flows:
-            print(f"[poller] {inc.name} has flows: {list(app_config.flows)}")
-            # TODO: re-register Prefect deployments
+        if app_config.flows:
+            print(f"[poller] {inc.name} flows: {list(app_config.flows)} — TODO: re-register")
 
         print(f"[poller] {inc.name} deployed")
         return True
@@ -191,7 +218,6 @@ def update_app(inc: IncludeConfig) -> bool:
 def main():
     config_file = NEXUS_HOME / "config.yaml"
     known: dict[str, str] = {}
-
     print(f"[poller] Started (default interval: {DEFAULT_POLL_INTERVAL}s)")
 
     while True:
@@ -209,7 +235,6 @@ def main():
             try:
                 rhead = remote_head(active_dir, inc.branch)
                 lhead = known.get(inc.name) or local_head(active_dir)
-
                 if rhead and rhead != lhead:
                     print(f"[poller] Change in {inc.name}: {lhead[:8]} → {rhead[:8]}")
                     if update_app(inc):
