@@ -1,0 +1,40 @@
+version: "0.5"
+
+processes:
+  prefect-server:
+    command: "uv run prefect server start --host 0.0.0.0 --port 4200"
+    working_dir: "${NEXUS_SRC}"
+    readiness_probe:
+      http_get:
+        path: /api/health
+        port: 4200
+      initial_delay_seconds: 3
+      period_seconds: 5
+      failure_threshold: 12
+
+  prefect-worker:
+    command: "uv run prefect worker start --pool nexus-pool"
+    working_dir: "${NEXUS_SRC}"
+    environment:
+      - "PREFECT_API_URL=http://localhost:4200/api"
+    depends_on:
+      prefect-server:
+        condition: process_healthy
+
+  nexus-web:
+    command: "uv run python -m nexus.web"
+    working_dir: "${NEXUS_SRC}"
+    environment:
+      - "NEXUS_PORT=8080"
+      - "PREFECT_UI_URL=http://localhost:4200"
+
+  nexus-poller:
+    command: "uv run python -m nexus.poller"
+    working_dir: "${NEXUS_SRC}"
+    environment:
+      - "NEXUS_HOME=${NEXUS_HOME}"
+      - "NEXUS_POLL_INTERVAL=60"
+      - "PROCESS_COMPOSE_PORT=9080"
+    depends_on:
+      prefect-server:
+        condition: process_healthy
