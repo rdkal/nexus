@@ -20,7 +20,7 @@ See `DESIGN.md` for the full design. Short version:
 - `src/nexus/setup.py` — clones included app repos into `$NEXUS_HOME/apps/`
 - `src/nexus/start.py` — builds and execs the `process-compose up` command, collecting compose files from all app `nexus.yaml`s
 - `src/nexus/web.py` — FastAPI app on port 8080; static HTML page linking to Prefect UI (port 4200)
-- `src/nexus/poller.py` — polls each included repo; on change runs `nexus_deploy.py` (Prefect flow) in a `git worktree` staging dir, then resets the active dir and restarts processes (skipped for flows-only apps)
+- `src/nexus/poller.py` — polls each included repo; on change prepares a `git worktree` staging dir (`<app>.next`), runs any deploy gates declared in the app's `nexus.yaml`, then resets the active dir and restarts processes (process steps skipped for flows-only apps)
 
 ## nexus.yaml Format
 

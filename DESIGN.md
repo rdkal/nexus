@@ -26,7 +26,7 @@ curl install.sh | bash -s -- <config-url>
 
 process-compose up \
   -f nexus/process-compose.yaml \
-  -f apps/api/api-compose.yaml \   ← collected from api/nexus.yaml
+  -f apps/api/process-compose.yaml \   ← path from api/nexus.yaml processes.web.file
   -p 9080 -t=false
 ```
 
@@ -237,7 +237,8 @@ startup and on each app update (using the `file:function` entrypoints).
 ├── config.yaml
 ├── config/              ← if config came from a git repo
 └── apps/
-    └── <app-name>/      ← one dir per app
+    ├── <app-name>/      ← active clone
+    └── <app-name>.next/ ← staging worktree (exists only during deploy)
 
 nexus repo:
 ├── DESIGN.md
