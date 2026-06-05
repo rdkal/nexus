@@ -105,7 +105,7 @@ def test_root_gate_pass_allows_deploy(make_app, nexus_home, fake_process_compose
     # Push an update that includes a passing gate
     app.push_update({
         "nexus.yaml": nexus_yaml,
-        "gates/check.py": "def run_check(): pass\n",
+        "gates/check.py": "from prefect import flow\n\n@flow\ndef run_check(): pass\n",
     })
 
     inc = IncludeConfig(name="myapp", repo=str(app.bare))
@@ -131,7 +131,7 @@ def test_root_gate_fail_aborts_deploy(make_app, nexus_home, fake_process_compose
 
     app.push_update({
         "nexus.yaml": nexus_yaml,
-        "gates/check.py": "def run_check(): raise RuntimeError('tests failed')\n",
+        "gates/check.py": "from prefect import flow\n\n@flow\ndef run_check(): raise RuntimeError('tests failed')\n",
     })
 
     inc = IncludeConfig(name="myapp", repo=str(app.bare))
@@ -159,7 +159,7 @@ def test_per_process_gate_fail_aborts(make_app, nexus_home, fake_process_compose
 
     app.push_update({
         "nexus.yaml": nexus_yaml,
-        "gates/check.py": "def run_check(): raise RuntimeError('smoke failed')\n",
+        "gates/check.py": "from prefect import flow\n\n@flow\ndef run_check(): raise RuntimeError('smoke failed')\n",
     })
 
     inc = IncludeConfig(name="myapp", repo=str(app.bare))
@@ -195,8 +195,8 @@ def test_per_flow_gate_pass_allows_deploy(make_app, nexus_home, fake_process_com
 
     app.push_update({
         "nexus.yaml": nexus_yaml,
-        "gates/check.py": "def run_check(): pass\n",
-        "flows/ingest.py": "def run(): pass\n",
+        "gates/check.py": "from prefect import flow\n\n@flow\ndef run_check(): pass\n",
+        "flows/ingest.py": "from prefect import flow\n\n@flow\ndef run(): pass\n",
     })
 
     inc = IncludeConfig(name="myapp", repo=str(app.bare))
@@ -221,8 +221,8 @@ def test_per_flow_gate_fail_aborts_deploy(make_app, nexus_home, fake_process_com
 
     app.push_update({
         "nexus.yaml": nexus_yaml,
-        "gates/check.py": "def run_check(): raise RuntimeError('flow gate failed')\n",
-        "flows/ingest.py": "def run(): pass\n",
+        "gates/check.py": "from prefect import flow\n\n@flow\ndef run_check(): raise RuntimeError('flow gate failed')\n",
+        "flows/ingest.py": "from prefect import flow\n\n@flow\ndef run(): pass\n",
     })
 
     inc = IncludeConfig(name="myapp", repo=str(app.bare))
@@ -250,8 +250,8 @@ def test_per_flow_gate_runs_before_process_changes(make_app, nexus_home, fake_pr
 
     app.push_update({
         "nexus.yaml": nexus_yaml,
-        "gates/check.py": "def run_check(): raise RuntimeError('flow gate failed')\n",
-        "flows/ingest.py": "def run(): pass\n",
+        "gates/check.py": "from prefect import flow\n\n@flow\ndef run_check(): raise RuntimeError('flow gate failed')\n",
+        "flows/ingest.py": "from prefect import flow\n\n@flow\ndef run(): pass\n",
     })
 
     inc = IncludeConfig(name="myapp", repo=str(app.bare))

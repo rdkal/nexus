@@ -78,6 +78,7 @@ _DEFAULT_FLOW_PY = (
 _MINIMAL_PYPROJECT = (
     '[project]\nname = "test-app"\nversion = "0.1.0"\n'
     'requires-python = ">=3.11"\n'
+    'dependencies = ["prefect>=3.0"]\n'
 )
 
 
@@ -142,10 +143,13 @@ class FakeProcessCompose:
 
 
 @pytest.fixture
-def fake_process_compose(monkeypatch):
+def fake_process_compose(monkeypatch, tmp_path):
     """
     Replaces the three process-compose API functions in poller with in-memory
     fakes. Prepopulate `fake.processes` with names the poller should see.
+
+    Also patches PREFECT_API_URL to empty so gate flows run in Prefect's local
+    ephemeral mode — no server required.
     """
     import nexus.poller as poller_mod
 
@@ -163,6 +167,9 @@ def fake_process_compose(monkeypatch):
         poller_mod, "start_process",
         lambda name: fake.started.append(name),
     )
+    monkeypatch.setattr(poller_mod, "PREFECT_API_URL", "")
+    monkeypatch.setenv("PREFECT_HOME", str(tmp_path / "prefect"))
+    monkeypatch.setenv("PREFECT_SERVER_ALLOW_EPHEMERAL_MODE", "1")
     return fake
 
 
