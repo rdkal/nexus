@@ -1,4 +1,4 @@
-"""Poll app git repos and run deploy flows before restarting processes."""
+"""Poll included app repos and run deploy flows before restarting processes."""
 import os
 import shutil
 import subprocess
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import httpx
 
-from nexus.config import AppConfig, load_config
+from nexus.config import IncludeConfig, NexusConfig, load_config
 
 NEXUS_HOME = Path(os.environ.get("NEXUS_HOME", Path.home() / ".nexus"))
 DEFAULT_POLL_INTERVAL = int(os.environ.get("NEXUS_POLL_INTERVAL", 60))
@@ -21,8 +21,7 @@ PREFECT_API_URL = os.environ.get("PREFECT_API_URL", "http://localhost:4200/api")
 def remote_head(repo_dir: Path, branch: str) -> str:
     result = subprocess.run(
         ["git", "-C", str(repo_dir), "ls-remote", "origin", f"refs/heads/{branch}"],
-        capture_output=True,
-        text=True,
+        capture_output=True, text=True,
     )
     parts = result.stdout.strip().split()
     return parts[0] if parts else ""
@@ -31,8 +30,7 @@ def remote_head(repo_dir: Path, branch: str) -> str:
 def local_head(repo_dir: Path) -> str:
     result = subprocess.run(
         ["git", "-C", str(repo_dir), "rev-parse", "HEAD"],
-        capture_output=True,
-        text=True,
+        capture_output=True, text=True,
     )
     return result.stdout.strip()
 
@@ -70,13 +68,11 @@ def apply_update(active_dir: Path, branch: str) -> None:
 # ── deploy flow ───────────────────────────────────────────────────────────────
 
 def run_deploy_flow(staging_dir: Path, app_name: str) -> bool:
-    """Run nexus_deploy.py in staging if present. Returns True if deploy should proceed."""
     deploy_script = staging_dir / "nexus_deploy.py"
     if not deploy_script.exists():
         return True
 
     print(f"[poller] Running deploy flow for {app_name}...")
-
     if subprocess.run(["uv", "sync"], cwd=str(staging_dir)).returncode != 0:
         print(f"[poller] uv sync failed in staging for {app_name}")
         return False
@@ -85,14 +81,12 @@ def run_deploy_flow(staging_dir: Path, app_name: str) -> bool:
     env["PREFECT_API_URL"] = PREFECT_API_URL
     result = subprocess.run(
         ["uv", "run", "python", "nexus_deploy.py"],
-        cwd=str(staging_dir),
-        env=env,
+        cwd=str(staging_dir), env=env,
     )
 
     if result.returncode == 0:
         print(f"[poller] Deploy flow passed for {app_name}")
         return True
-
     print(f"[poller] Deploy flow FAILED for {app_name} — keeping current version")
     return False
 
@@ -126,41 +120,68 @@ def start_process(name: str) -> None:
         print(f"[poller] Failed to start {name}: {e}")
 
 
+# ── app config helpers ────────────────────────────────────────────────────────
+
+def app_nexus_config(active_dir: Path) -> NexusConfig | None:
+    nexus_yaml = active_dir / "nexus.yaml"
+    if nexus_yaml.exists():
+        return load_config(nexus_yaml)
+    return None
+
+
+def has_processes(app_config: NexusConfig | None, active_dir: Path) -> bool:
+    if app_config and app_config.processes:
+        return True
+    # Backward compat: bare process-compose.yaml with no nexus.yaml
+    return (active_dir / "process-compose.yaml").exists() and app_config is None
+
+
 # ── update orchestration ──────────────────────────────────────────────────────
 
-def update_app(app: AppConfig) -> bool:
-    active_dir = NEXUS_HOME / "apps" / app.name
-    staging_dir = NEXUS_HOME / "apps" / f"{app.name}.next"
+def update_app(inc: IncludeConfig) -> bool:
+    active_dir = NEXUS_HOME / "apps" / inc.name
+    staging_dir = NEXUS_HOME / "apps" / f"{inc.name}.next"
 
     if not active_dir.exists():
         return False
 
     try:
         fetch_origin(active_dir)
-        prepare_staging(active_dir, staging_dir, app.branch)
+        prepare_staging(active_dir, staging_dir, inc.branch)
 
-        if not run_deploy_flow(staging_dir, app.name):
+        if not run_deploy_flow(staging_dir, inc.name):
             _remove_worktree(active_dir, staging_dir)
             return False
 
-        processes = app_processes(app.name)
-        for proc in processes:
-            print(f"[poller]   stop {proc}")
-            stop_process(proc)
+        app_config = app_nexus_config(active_dir)
+        with_procs = has_processes(app_config, active_dir)
 
-        time.sleep(2)
-        apply_update(active_dir, app.branch)
+        if with_procs:
+            processes = app_processes(inc.name)
+            for proc in processes:
+                print(f"[poller]   stop {proc}")
+                stop_process(proc)
+            time.sleep(2)
 
-        for proc in processes:
-            print(f"[poller]   start {proc}")
-            start_process(proc)
+        apply_update(active_dir, inc.branch)
+
+        if with_procs:
+            processes = app_processes(inc.name)
+            for proc in processes:
+                print(f"[poller]   start {proc}")
+                start_process(proc)
 
         _remove_worktree(active_dir, staging_dir)
-        print(f"[poller] {app.name} deployed")
+
+        if app_config and app_config.flows:
+            print(f"[poller] {inc.name} has flows: {list(app_config.flows)}")
+            # TODO: re-register Prefect deployments
+
+        print(f"[poller] {inc.name} deployed")
         return True
 
     except Exception as e:
-        print(f"[poller] Error deploying {app.name}: {e}")
+        print(f"[poller] Error deploying {inc.name}: {e}")
         _remove_worktree(active_dir, staging_dir)
         return False
 
@@ -181,22 +202,22 @@ def main():
             time.sleep(DEFAULT_POLL_INTERVAL)
             continue
 
-        for app in config.apps:
-            active_dir = NEXUS_HOME / "apps" / app.name
+        for inc in config.includes:
+            active_dir = NEXUS_HOME / "apps" / inc.name
             if not active_dir.exists():
                 continue
             try:
-                rhead = remote_head(active_dir, app.branch)
-                lhead = known.get(app.name) or local_head(active_dir)
+                rhead = remote_head(active_dir, inc.branch)
+                lhead = known.get(inc.name) or local_head(active_dir)
 
                 if rhead and rhead != lhead:
-                    print(f"[poller] Change in {app.name}: {lhead[:8]} → {rhead[:8]}")
-                    if update_app(app):
-                        known[app.name] = rhead
+                    print(f"[poller] Change in {inc.name}: {lhead[:8]} → {rhead[:8]}")
+                    if update_app(inc):
+                        known[inc.name] = rhead
                 else:
-                    known[app.name] = lhead
+                    known[inc.name] = lhead
             except Exception as e:
-                print(f"[poller] Error checking {app.name}: {e}")
+                print(f"[poller] Error checking {inc.name}: {e}")
 
         time.sleep(DEFAULT_POLL_INTERVAL)
 

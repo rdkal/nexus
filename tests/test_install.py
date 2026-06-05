@@ -14,7 +14,7 @@ def test_config_content(running_nexus):
     import yaml
     config = yaml.safe_load((running_nexus / "config.yaml").read_text())
     assert config["project"] == "nexus-test"
-    assert config["apps"] == []
+    assert "includes" not in config or config.get("includes") is None
 
 
 def test_web_responds(running_nexus):

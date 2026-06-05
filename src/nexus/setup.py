@@ -1,25 +1,25 @@
-"""Clone or update all app repos listed in config."""
+"""Clone or update all included app repos."""
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-from nexus.config import AppConfig, load_config
+from nexus.config import IncludeConfig, load_config
 
 
-def clone_or_update(app: AppConfig, dest: Path) -> None:
+def clone_or_update(inc: IncludeConfig, dest: Path) -> None:
     if dest.joinpath(".git").exists():
-        print(f"  Updating {app.name}...")
+        print(f"  Updating {inc.name}...")
         subprocess.run(["git", "-C", str(dest), "fetch", "origin"], check=True)
         subprocess.run(
-            ["git", "-C", str(dest), "reset", "--hard", f"origin/{app.branch}"],
+            ["git", "-C", str(dest), "reset", "--hard", f"origin/{inc.branch}"],
             check=True,
         )
     else:
-        print(f"  Cloning {app.name} from {app.repo}...")
+        print(f"  Cloning {inc.name} from {inc.repo}...")
         dest.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
-            ["git", "clone", "--branch", app.branch, app.repo, str(dest)],
+            ["git", "clone", "--branch", inc.branch, inc.repo, str(dest)],
             check=True,
         )
 
@@ -36,8 +36,8 @@ def main():
     print(f"Setting up project: {config.project}")
 
     apps_dir = nexus_home / "apps"
-    for app in config.apps:
-        clone_or_update(app, apps_dir / app.name)
+    for inc in config.includes:
+        clone_or_update(inc, apps_dir / inc.name)
 
     print("Done.")
 
