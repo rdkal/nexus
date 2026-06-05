@@ -51,7 +51,7 @@ def _parse_process(val: str | dict) -> ProcessConfig:
 
 
 def load_config(path: Path) -> NexusConfig:
-    data = yaml.safe_load(path.read_text())
+    data = yaml.safe_load(path.read_text()) or {}
 
     includes = []
     for name, val in data.get("includes", {}).items():

@@ -139,6 +139,15 @@ def test_deploy_null_is_empty(cfg):
     assert c.deploy == []
 
 
+def test_empty_file_returns_empty_config(cfg):
+    c = cfg("")
+    assert c.project is None
+    assert c.includes == []
+    assert c.flows == {}
+    assert c.processes == {}
+    assert c.deploy == []
+
+
 # ── app nexus.yaml (no project, no includes) ──────────────────────────────────
 
 def test_app_config_no_project(cfg):

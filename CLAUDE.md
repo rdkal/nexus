@@ -6,7 +6,7 @@ Self-hosted project orchestration: git polling, process management (process-comp
 
 ```bash
 uv sync                  # install deps
-uv run pytest tests/ -v  # run integration tests
+uv run pytest tests/ -v  # run tests
 ./install.sh --home /tmp/nexus-dev tests/fixtures/nexus.yaml  # dev run
 ```
 
@@ -77,13 +77,13 @@ Apps may have only `flows`, only `processes`, or both. Apps must have a `nexus.y
 - `tests/test_config.py` — unit tests for nexus.yaml parsing; no filesystem or subprocesses
 - `tests/test_setup.py` — integration tests for `clone_or_update` using local bare git repos
 - `tests/test_poller.py` — integration tests for change detection and the deploy pipeline
+- `tests/test_install.py` — E2E tests; use the `running_nexus` session fixture (see below)
 
 `tests/conftest.py` provides:
 - `make_app(name, nexus_yaml)` — factory that wires up a bare remote + scratch clone + active clone locally so git push/fetch work without a network
 - `nexus_home` — a temporary `$NEXUS_HOME` directory
 - `fake_process_compose` — monkeypatches `app_processes`, `stop_process`, `start_process` in `poller` with in-memory fakes
-
-The `running_nexus` session fixture in `conftest.py` runs `install.sh` against `tests/fixtures/nexus.yaml` and waits for port 8080 — use it for E2E tests. `nexus-web` has no `depends_on` so it starts immediately (~5s).
+- `running_nexus` — session-scoped; runs `install.sh` against `tests/fixtures/nexus.yaml` and waits for port 8080; use this for E2E tests that need the full stack; `nexus-web` has no `depends_on` so it starts in ~5s
 
 ## TODO.md
 

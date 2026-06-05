@@ -2,13 +2,11 @@
 import os
 from pathlib import Path
 
-from nexus.config import load_config
+from nexus.config import NexusConfig, load_config
 
 
-def collect_compose_files(nexus_home: Path, nexus_src: Path) -> list[str]:
+def collect_compose_files(nexus_home: Path, nexus_src: Path, config: NexusConfig) -> list[str]:
     files = [str(nexus_src / "process-compose.yaml")]
-
-    config = load_config(nexus_home / "config.yaml")
 
     for _name, proc in config.processes.items():
         files.append(str(nexus_src / proc.file))
@@ -29,7 +27,8 @@ def main():
     nexus_home = Path(os.environ.get("NEXUS_HOME", Path.home() / ".nexus"))
     nexus_src = Path(os.environ.get("NEXUS_SRC", Path(__file__).parent.parent.parent))
 
-    compose_files = collect_compose_files(nexus_home, nexus_src)
+    config = load_config(nexus_home / "config.yaml")
+    compose_files = collect_compose_files(nexus_home, nexus_src, config)
 
     cmd = ["process-compose", "up"]
     for f in compose_files:
@@ -41,7 +40,6 @@ def main():
     env["NEXUS_SRC"] = str(nexus_src)
     env["PREFECT_API_URL"] = "http://localhost:4200/api"
 
-    config = load_config(nexus_home / "config.yaml")
     for inc in config.includes:
         key = f"NEXUS_APP_{inc.name.upper().replace('-', '_')}_DIR"
         env[key] = str(nexus_home / "apps" / inc.name)

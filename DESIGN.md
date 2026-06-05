@@ -51,8 +51,7 @@ includes:
     branch: main                     # optional, default: main
     poll_interval: 30                # optional seconds, default: 60
 
-  workers:                           # shorthand: just the repo URL
-    repo: https://github.com/org/workers
+  workers: https://github.com/org/workers   # shorthand: plain string URL
 
 # Root-level flows and processes are also valid:
 flows:
@@ -236,6 +235,7 @@ startup and on each app update (using the `file:function` entrypoints).
 ~/.nexus/
 ├── config.yaml
 ├── config/              ← if config came from a git repo
+├── nexus/               ← this repo (the nexus source)
 └── apps/
     ├── <app-name>/      ← active clone
     └── <app-name>.next/ ← staging worktree (exists only during deploy)

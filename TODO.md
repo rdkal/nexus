@@ -42,7 +42,7 @@ Status legend: ✅ Done · ⚠️ Partial · ❌ Not done
 | No-op when HEAD unchanged | ✅ | ✅ | ✅ |
 | Returns False when active dir missing | ✅ | ✅ | ✅ |
 | Re-reads config.yaml each cycle | ✅ | ✅ | ❌ |
-| Per-app poll_interval | ✅ | ✅ | ❌ |
+| Per-app poll_interval | ✅ | ⚠️ (parsed, not used in loop) | ❌ |
 | **Deploy pipeline** | ✅ | ✅ | ⚠️ |
 | Staging worktree (app.next) | ✅ | ✅ | ✅ |
 | uv sync in staging | ✅ | ✅ | ✅ |
