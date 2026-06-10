@@ -27,10 +27,10 @@ Status legend: ✅ Done · ⚠️ Partial · ❌ Not done
 | Initial clone | ✅ | ✅ | ✅ |
 | Update (fast-forward) existing clone | ✅ | ✅ | ✅ |
 | Clone respects branch | ✅ | ✅ | ✅ |
-| **process-compose launch (start.py)** | ✅ | ✅ | ⚠️ |
+| **process-compose launch (start.py)** | ✅ | ✅ | ✅ |
 | Nexus-own services compose | ✅ | ✅ | ✅ (implicitly — web starts) |
-| App compose files collected from nexus.yaml | ✅ | ✅ | ❌ |
-| Per-app env vars injected (NEXUS_APP_*_DIR, NEXUS_BASE_PATH_*) | ✅ | ✅ | ❌ |
+| App compose files collected from nexus.yaml | ✅ | ✅ | ✅ |
+| Per-app env vars injected (NEXUS_APP_*_DIR, NEXUS_BASE_PATH_*) | ✅ | ✅ | ✅ |
 | **nexus-web portal (port 8080)** | ✅ | ✅ | ✅ |
 | Serves HTTP 200 | ✅ | ✅ | ✅ |
 | Links to Prefect UI at port 4200 | ✅ | ✅ | ✅ |
@@ -42,7 +42,7 @@ Status legend: ✅ Done · ⚠️ Partial · ❌ Not done
 | No-op when HEAD unchanged | ✅ | ✅ | ✅ |
 | Returns False when active dir missing | ✅ | ✅ | ✅ |
 | Re-reads config.yaml each cycle | ✅ | ✅ | ❌ |
-| Per-app poll_interval | ✅ | ⚠️ (parsed, not used in loop) | ❌ |
+| Per-app poll_interval | ✅ | ✅ | ❌ |
 | **Deploy pipeline** | ✅ | ✅ | ⚠️ |
 | Staging worktree (app.next) | ✅ | ✅ | ✅ |
 | uv sync in staging | ✅ | ✅ | ✅ |
