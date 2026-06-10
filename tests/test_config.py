@@ -21,37 +21,37 @@ def cfg(tmp_path):
 
 def test_parse_repo_schema_less():
     url, ref = _parse_repo("github.com/org/api")
-    assert url == "https://github.com/org/api"
+    assert url == "github.com/org/api"
     assert ref == "main"
 
 
 def test_parse_repo_at_ref():
     url, ref = _parse_repo("github.com/org/api@v1.2.3")
-    assert url == "https://github.com/org/api"
+    assert url == "github.com/org/api"
     assert ref == "v1.2.3"
 
 
 def test_parse_repo_at_branch():
     url, ref = _parse_repo("github.com/org/api@develop")
-    assert url == "https://github.com/org/api"
+    assert url == "github.com/org/api"
     assert ref == "develop"
 
 
-def test_parse_repo_full_https_url_unchanged():
+def test_parse_repo_https_scheme_stripped():
     url, ref = _parse_repo("https://github.com/org/api")
-    assert url == "https://github.com/org/api"
+    assert url == "github.com/org/api"
     assert ref == "main"
 
 
-def test_parse_repo_full_https_url_with_ref():
+def test_parse_repo_https_scheme_stripped_with_ref():
     url, ref = _parse_repo("https://github.com/org/api@stable")
-    assert url == "https://github.com/org/api"
+    assert url == "github.com/org/api"
     assert ref == "stable"
 
 
-def test_parse_repo_ssh_url_untouched():
+def test_parse_repo_ssh_url_normalised():
     url, ref = _parse_repo("git@github.com:org/api")
-    assert url == "git@github.com:org/api"
+    assert url == "github.com/org/api"
     assert ref == "main"
 
 
@@ -87,7 +87,7 @@ def test_include_shorthand(cfg):
     assert len(c.includes) == 1
     inc = c.includes[0]
     assert inc.name == "api"
-    assert inc.repo == "https://github.com/org/api"
+    assert inc.repo == "github.com/org/api"
     assert inc.ref == "main"
     assert inc.poll_interval == 60
     assert inc.env == {}
@@ -100,7 +100,7 @@ def test_include_shorthand_with_ref(cfg):
           api: github.com/org/api@v2.0.0
     """)
     inc = c.includes[0]
-    assert inc.repo == "https://github.com/org/api"
+    assert inc.repo == "github.com/org/api"
     assert inc.ref == "v2.0.0"
 
 
@@ -113,7 +113,7 @@ def test_include_full_form(cfg):
             poll_interval: 30
     """)
     inc = c.includes[0]
-    assert inc.repo == "https://github.com/org/api"
+    assert inc.repo == "github.com/org/api"
     assert inc.ref == "develop"
     assert inc.poll_interval == 30
 

@@ -71,17 +71,17 @@ processes:
   infra: infra-compose.yaml
 ```
 
-**Repo location format** — `[host/]owner/repo[@ref]`:
+**Repo location format** — `host/owner/repo[@ref]`:
 
-| String | URL | ref |
-|---|---|---|
-| `github.com/org/api` | `https://github.com/org/api` | `main` |
-| `github.com/org/api@v1.2.3` | `https://github.com/org/api` | `v1.2.3` |
-| `github.com/org/api@develop` | `https://github.com/org/api` | `develop` |
-| `https://github.com/org/api` | unchanged (legacy) | `main` |
-| `git@github.com:org/api` | unchanged (SSH) | `main` |
-| `/local/path/to/repo` | local path | `main` |
-| `/local/path/to/repo@feature` | local path | `feature` |
+| String | ref |
+|---|---|
+| `github.com/org/api` | `main` |
+| `github.com/org/api@v1.2.3` | `v1.2.3` |
+| `github.com/org/api@develop` | `develop` |
+| `/local/path/to/repo` | `main` |
+| `/local/path/to/repo@feature` | `feature` |
+
+No scheme is part of the format. How the identifier resolves to a cloneable URL is an implementation detail — nexus tries HTTPS first, then SSH, and uses the first that succeeds.
 
 `ref` can be a branch name or a tag name. Nexus resolves both — tags are checked via `refs/tags/` in `ls-remote` and fetched with `git fetch origin <ref>`.
 

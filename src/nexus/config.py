@@ -4,22 +4,31 @@ import yaml
 
 
 def _parse_repo(raw: str) -> tuple[str, str]:
-    """Parse 'github.com/user/repo@ref' → (url, ref). Default ref is 'main'.
+    """Parse a repo location string into (identifier, ref).
 
-    Supports:
-      github.com/user/repo           → https://github.com/user/repo,  ref=main
-      github.com/user/repo@v1.2.3    → https://github.com/user/repo,  ref=v1.2.3
-      https://github.com/user/repo   → unchanged (legacy full URL)
-      git@github.com:user/repo       → unchanged (SSH URL)
-      /absolute/path                 → local path
+    The identifier is always schema-less: 'github.com/owner/repo' or a
+    local absolute/relative path.  Any scheme or SSH prefix is stripped —
+    how the identifier is turned into a cloneable URL is decided at clone
+    time, not here.
+
+      github.com/user/repo           → ('github.com/user/repo',  'main')
+      github.com/user/repo@v1.2.3    → ('github.com/user/repo',  'v1.2.3')
+      https://github.com/user/repo   → ('github.com/user/repo',  'main')
+      git@github.com:user/repo       → ('github.com/user/repo',  'main')
+      /absolute/path@feature         → ('/absolute/path',         'feature')
     """
     ref = "main"
-    # Split @ref suffix, but leave git@host:path SSH URLs intact
-    if "@" in raw and not raw.startswith("git@"):
+    # Convert git@host:path SSH form → host/path (before splitting on @)
+    if raw.startswith("git@") and ":" in raw:
+        raw = raw[4:].replace(":", "/", 1)
+    # Strip URL scheme if present
+    for prefix in ("https://", "http://", "git://"):
+        if raw.startswith(prefix):
+            raw = raw[len(prefix):]
+            break
+    # Split off trailing @ref
+    if "@" in raw:
         raw, ref = raw.rsplit("@", 1)
-    # Prepend https:// when there is no scheme and it is not a local path
-    if not raw.startswith(("/", ".", "https://", "http://", "git@")):
-        raw = f"https://{raw}"
     return raw, ref
 
 

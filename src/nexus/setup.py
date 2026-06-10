@@ -1,10 +1,22 @@
 """Clone or update all included app repos."""
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from nexus.config import IncludeConfig, load_config
+
+
+def _clone_urls(repo: str) -> list[str]:
+    """Candidate git clone URLs for a schema-less repo identifier, in priority order."""
+    if repo.startswith(("/", ".")):
+        return [repo]  # local path — use as-is
+    host, _, path = repo.partition("/")
+    return [
+        f"https://{repo}",
+        f"git@{host}:{path}",
+    ]
 
 
 def clone_or_update(inc: IncludeConfig, dest: Path) -> None:
@@ -21,10 +33,17 @@ def clone_or_update(inc: IncludeConfig, dest: Path) -> None:
     else:
         print(f"  Cloning {inc.name} from {inc.repo}...")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            ["git", "clone", "--branch", inc.ref, inc.repo, str(dest)],
-            check=True,
-        )
+        last_err = None
+        for url in _clone_urls(inc.repo):
+            result = subprocess.run(
+                ["git", "clone", "--branch", inc.ref, url, str(dest)],
+                capture_output=True,
+            )
+            if result.returncode == 0:
+                return
+            shutil.rmtree(dest, ignore_errors=True)
+            last_err = result.stderr.decode(errors="replace").strip()
+        raise RuntimeError(f"Could not clone {inc.repo!r}: {last_err}")
 
 
 def main():
