@@ -19,13 +19,19 @@ PREFECT_API_URL = os.environ.get("PREFECT_API_URL", "http://localhost:4200/api")
 
 # ── git helpers ───────────────────────────────────────────────────────────────
 
-def remote_head(repo_dir: Path, branch: str) -> str:
+def remote_head(repo_dir: Path, ref: str) -> str:
+    """Commit SHA of ref on origin. Handles branches and tags (incl. annotated)."""
     r = subprocess.run(
-        ["git", "-C", str(repo_dir), "ls-remote", "origin", f"refs/heads/{branch}"],
+        ["git", "-C", str(repo_dir), "ls-remote", "origin",
+         f"refs/heads/{ref}", f"refs/tags/{ref}", f"refs/tags/{ref}^{{}}"],
         capture_output=True, text=True,
     )
-    parts = r.stdout.strip().split()
-    return parts[0] if parts else ""
+    sha = ""
+    for line in r.stdout.strip().splitlines():
+        parts = line.split()
+        if parts:
+            sha = parts[0]  # last entry wins: ^{} (dereferenced tag) comes last
+    return sha
 
 
 def local_head(repo_dir: Path) -> str:
@@ -36,15 +42,15 @@ def local_head(repo_dir: Path) -> str:
     return r.stdout.strip()
 
 
-def fetch_origin(repo_dir: Path) -> None:
-    subprocess.run(["git", "-C", str(repo_dir), "fetch", "origin"], check=True)
+def fetch_ref(repo_dir: Path, ref: str) -> None:
+    """Fetch a specific branch or tag from origin and update FETCH_HEAD."""
+    subprocess.run(["git", "-C", str(repo_dir), "fetch", "origin", ref], check=True)
 
 
-def prepare_staging(active_dir: Path, staging_dir: Path, branch: str) -> None:
+def prepare_staging(active_dir: Path, staging_dir: Path) -> None:
     _remove_worktree(active_dir, staging_dir)
     subprocess.run(
-        ["git", "-C", str(active_dir), "worktree", "add",
-         str(staging_dir), f"origin/{branch}"],
+        ["git", "-C", str(active_dir), "worktree", "add", str(staging_dir), "FETCH_HEAD"],
         check=True,
     )
 
@@ -58,9 +64,9 @@ def _remove_worktree(active_dir: Path, staging_dir: Path) -> None:
         shutil.rmtree(staging_dir, ignore_errors=True)
 
 
-def apply_update(active_dir: Path, branch: str) -> None:
+def apply_update(active_dir: Path) -> None:
     subprocess.run(
-        ["git", "-C", str(active_dir), "reset", "--hard", f"origin/{branch}"],
+        ["git", "-C", str(active_dir), "reset", "--hard", "FETCH_HEAD"],
         check=True,
     )
     subprocess.run(["uv", "sync"], cwd=str(active_dir), check=True)
@@ -105,10 +111,17 @@ def run_gates(
     return True
 
 
-def all_gates_pass(staging_dir: Path, app_config: NexusConfig, app_name: str) -> bool:
+def all_gates_pass(
+    staging_dir: Path,
+    app_config: NexusConfig,
+    app_name: str,
+    extra_env: dict | None = None,
+) -> bool:
     """Run all deploy gates for an app in staging. All must pass."""
     env = os.environ.copy()
     env["PREFECT_API_URL"] = PREFECT_API_URL
+    if extra_env:
+        env.update(extra_env)
     flows = app_config.flows
 
     # 1. Root gates
@@ -169,8 +182,8 @@ def update_app(inc: IncludeConfig, nexus_home: Path = NEXUS_HOME) -> bool:
         return False
 
     try:
-        fetch_origin(active_dir)
-        prepare_staging(active_dir, staging_dir, inc.branch)
+        fetch_ref(active_dir, inc.ref)
+        prepare_staging(active_dir, staging_dir)
         subprocess.run(["uv", "sync"], cwd=str(staging_dir), check=True)
 
         app_nexus = staging_dir / "nexus.yaml"
@@ -181,7 +194,7 @@ def update_app(inc: IncludeConfig, nexus_home: Path = NEXUS_HOME) -> bool:
 
         app_config = load_config(app_nexus)
 
-        if not all_gates_pass(staging_dir, app_config, inc.name):
+        if not all_gates_pass(staging_dir, app_config, inc.name, extra_env=inc.env):
             _remove_worktree(active_dir, staging_dir)
             return False
 
@@ -194,7 +207,7 @@ def update_app(inc: IncludeConfig, nexus_home: Path = NEXUS_HOME) -> bool:
         if processes:
             time.sleep(2)
 
-        apply_update(active_dir, inc.branch)
+        apply_update(active_dir)
 
         for proc in processes:
             print(f"[poller]   start {proc}")
@@ -252,7 +265,7 @@ def main():
                 continue
             last_checked[inc.name] = now
             try:
-                rhead = remote_head(active_dir, inc.branch)
+                rhead = remote_head(active_dir, inc.ref)
                 lhead = known.get(inc.name) or local_head(active_dir)
                 if rhead and rhead != lhead:
                     print(f"[poller] Change in {inc.name}: {lhead[:8]} → {rhead[:8]}")

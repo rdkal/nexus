@@ -3,12 +3,33 @@ from pathlib import Path
 import yaml
 
 
+def _parse_repo(raw: str) -> tuple[str, str]:
+    """Parse 'github.com/user/repo@ref' → (url, ref). Default ref is 'main'.
+
+    Supports:
+      github.com/user/repo           → https://github.com/user/repo,  ref=main
+      github.com/user/repo@v1.2.3    → https://github.com/user/repo,  ref=v1.2.3
+      https://github.com/user/repo   → unchanged (legacy full URL)
+      git@github.com:user/repo       → unchanged (SSH URL)
+      /absolute/path                 → local path
+    """
+    ref = "main"
+    # Split @ref suffix, but leave git@host:path SSH URLs intact
+    if "@" in raw and not raw.startswith("git@"):
+        raw, ref = raw.rsplit("@", 1)
+    # Prepend https:// when there is no scheme and it is not a local path
+    if not raw.startswith(("/", ".", "https://", "http://", "git@")):
+        raw = f"https://{raw}"
+    return raw, ref
+
+
 @dataclass
 class IncludeConfig:
     name: str
-    repo: str
-    branch: str = "main"
+    repo: str                                            # clean URL or local path
+    ref: str = "main"                                    # branch, tag, or SHA
     poll_interval: int = 60
+    env: dict[str, str] = field(default_factory=dict)   # injected into app processes
 
 
 @dataclass
@@ -56,13 +77,16 @@ def load_config(path: Path) -> NexusConfig:
     includes = []
     for name, val in data.get("includes", {}).items():
         if isinstance(val, str):
-            includes.append(IncludeConfig(name=name, repo=val))
+            repo, ref = _parse_repo(val)
+            includes.append(IncludeConfig(name=name, repo=repo, ref=ref))
         else:
+            repo, ref = _parse_repo(val["repo"])
             includes.append(IncludeConfig(
                 name=name,
-                repo=val["repo"],
-                branch=val.get("branch", "main"),
+                repo=repo,
+                ref=ref,
                 poll_interval=val.get("poll_interval", 60),
+                env=val.get("env") or {},
             ))
 
     return NexusConfig(

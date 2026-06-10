@@ -10,16 +10,19 @@ from nexus.config import IncludeConfig, load_config
 def clone_or_update(inc: IncludeConfig, dest: Path) -> None:
     if dest.joinpath(".git").exists():
         print(f"  Updating {inc.name}...")
-        subprocess.run(["git", "-C", str(dest), "fetch", "origin"], check=True)
         subprocess.run(
-            ["git", "-C", str(dest), "reset", "--hard", f"origin/{inc.branch}"],
+            ["git", "-C", str(dest), "fetch", "origin", inc.ref],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(dest), "reset", "--hard", "FETCH_HEAD"],
             check=True,
         )
     else:
         print(f"  Cloning {inc.name} from {inc.repo}...")
         dest.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
-            ["git", "clone", "--branch", inc.branch, inc.repo, str(dest)],
+            ["git", "clone", "--branch", inc.ref, inc.repo, str(dest)],
             check=True,
         )
 

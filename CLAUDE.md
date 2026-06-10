@@ -30,11 +30,14 @@ One config format used everywhere — root file and app repo files share the sam
 ```yaml
 project: my-project
 includes:
-  api:                               # name → namespace + base path /api
-    repo: https://github.com/org/api
-    branch: main                     # default: main
+  # Shorthand: schema-less host/path, optional @ref (branch or tag; default: main)
+  api: github.com/org/api@v1.4.0
+  # Full form: add poll_interval and env injection
+  workers:
+    repo: github.com/org/workers@main
     poll_interval: 30                # default: 60s
-  workers: https://github.com/org/workers   # shorthand
+    env:
+      WORKERS_CONCURRENCY: "4"
 ```
 
 **App** (inside app repo root as `nexus.yaml`):

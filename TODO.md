@@ -13,8 +13,11 @@ Status legend: ✅ Done · ⚠️ Partial · ❌ Not done
 | Git repo URL for config | ✅ | ✅ | ❌ |
 | **nexus.yaml parsing** | ✅ | ✅ | ✅ |
 | Root config (project + includes) | ✅ | ✅ | ✅ |
-| IncludeConfig shorthand (string URL) | ✅ | ✅ | ✅ |
-| IncludeConfig full form (repo/branch/poll_interval) | ✅ | ✅ | ✅ |
+| IncludeConfig shorthand (`github.com/org/repo@ref`) | ✅ | ✅ | ✅ |
+| IncludeConfig full form (repo + poll_interval + env) | ✅ | ✅ | ✅ |
+| Schema-less URL → https:// prepended | ✅ | ✅ | ✅ |
+| `@ref` suffix for branch or tag pinning | ✅ | ✅ | ✅ |
+| `env:` map injected into app processes | ✅ | ✅ | ✅ |
 | Multiple includes | ✅ | ✅ | ✅ |
 | FlowConfig shorthand (string entrypoint) | ✅ | ✅ | ✅ |
 | FlowConfig full form (entrypoint + deploy gates) | ✅ | ✅ | ✅ |
@@ -26,11 +29,12 @@ Status legend: ✅ Done · ⚠️ Partial · ❌ Not done
 | **App repo cloning (setup.py)** | ✅ | ✅ | ✅ |
 | Initial clone | ✅ | ✅ | ✅ |
 | Update (fast-forward) existing clone | ✅ | ✅ | ✅ |
-| Clone respects branch | ✅ | ✅ | ✅ |
+| Clone respects ref (branch or tag) | ✅ | ✅ | ✅ |
 | **process-compose launch (start.py)** | ✅ | ✅ | ✅ |
 | Nexus-own services compose | ✅ | ✅ | ✅ (implicitly — web starts) |
 | App compose files collected from nexus.yaml | ✅ | ✅ | ✅ |
 | Per-app env vars injected (NEXUS_APP_*_DIR, NEXUS_BASE_PATH_*) | ✅ | ✅ | ✅ |
+| Per-include custom env vars injected | ✅ | ✅ | ✅ |
 | **nexus-web portal (port 8080)** | ✅ | ✅ | ✅ |
 | Serves HTTP 200 | ✅ | ✅ | ✅ |
 | Links to Prefect UI at port 4200 | ✅ | ✅ | ✅ |
