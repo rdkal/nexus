@@ -60,5 +60,5 @@ Status legend: ✅ Done · ⚠️ Partial · ❌ Not done
 | Re-register flows after app update | ✅ | ✅ | ✅ |
 | Deployment naming: `{app-name}-{flow-name}` (Prefect rejects slashes) | ✅ | ✅ | ✅ |
 | In-flight runs finish on old code; queued/new runs get new code | ✅ | ✅ | ❌ |
-| **Startup on boot** | ❌ | ❌ | ❌ |
-| systemd unit / launchd plist | ❌ | ❌ | ❌ |
+| **Startup on boot** | ✅ | ✅ | ⚠️ |
+| systemd unit / launchd plist | ✅ | ✅ | ⚠️ (no automated test; requires real systemd/launchd session) |

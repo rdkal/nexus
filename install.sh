@@ -104,11 +104,95 @@ fi
 echo "Setting up apps..."
 (cd "$NEXUS_SRC" && NEXUS_HOME="$NEXUS_HOME" uv run python -m nexus.setup "$CONFIG_FILE")
 
+# ── startup on boot ───────────────────────────────────────────────────────────
+UV_BIN="$(command -v uv)"
+
+install_systemd_service() {
+    local service_dir="$HOME/.config/systemd/user"
+    mkdir -p "$service_dir"
+    cat > "$service_dir/nexus.service" <<EOF
+[Unit]
+Description=Nexus orchestration service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=${NEXUS_SRC}
+Environment=NEXUS_HOME=${NEXUS_HOME}
+Environment=NEXUS_SRC=${NEXUS_SRC}
+ExecStart=${UV_BIN} run python -m nexus.start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+    echo "Installed systemd service: $service_dir/nexus.service"
+}
+
+install_launchd_plist() {
+    local plist_dir="$HOME/Library/LaunchAgents"
+    local plist="$plist_dir/com.nexus.agent.plist"
+    mkdir -p "$plist_dir"
+    cat > "$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.nexus.agent</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${UV_BIN}</string>
+        <string>run</string>
+        <string>python</string>
+        <string>-m</string>
+        <string>nexus.start</string>
+    </array>
+    <key>WorkingDirectory</key><string>${NEXUS_SRC}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NEXUS_HOME</key><string>${NEXUS_HOME}</string>
+        <key>NEXUS_SRC</key><string>${NEXUS_SRC}</string>
+    </dict>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>StandardOutPath</key><string>${NEXUS_HOME}/nexus.log</string>
+    <key>StandardErrorPath</key><string>${NEXUS_HOME}/nexus.log</string>
+</dict>
+</plist>
+EOF
+    echo "Installed launchd plist: $plist"
+}
+
 # ── launch ────────────────────────────────────────────────────────────────────
 echo ""
 echo "Starting nexus..."
 echo "  Nexus UI  → http://localhost:8080"
 echo "  Prefect   → http://localhost:4200"
 echo ""
-cd "$NEXUS_SRC"
-exec env NEXUS_HOME="$NEXUS_HOME" NEXUS_SRC="$NEXUS_SRC" uv run python -m nexus.start
+
+_OS="$(uname -s)"
+if [[ "$_OS" == "Darwin" ]]; then
+    install_launchd_plist
+    _PLIST="$HOME/Library/LaunchAgents/com.nexus.agent.plist"
+    launchctl unload "$_PLIST" 2>/dev/null || true
+    launchctl load -w "$_PLIST"
+    echo "Nexus will start automatically on login (launchd)."
+elif [[ "$_OS" == "Linux" ]]; then
+    install_systemd_service
+    # Enable linger so the user service survives logout
+    loginctl enable-linger "$(whoami)" 2>/dev/null || true
+    if systemctl --user daemon-reload 2>/dev/null && \
+       systemctl --user enable nexus 2>/dev/null && \
+       systemctl --user start nexus 2>/dev/null; then
+        echo "Nexus will start automatically on login (systemd --user)."
+        echo "  Status: systemctl --user status nexus"
+    else
+        echo "Note: systemd user session not available — starting directly."
+        cd "$NEXUS_SRC"
+        exec env NEXUS_HOME="$NEXUS_HOME" NEXUS_SRC="$NEXUS_SRC" uv run python -m nexus.start
+    fi
+else
+    cd "$NEXUS_SRC"
+    exec env NEXUS_HOME="$NEXUS_HOME" NEXUS_SRC="$NEXUS_SRC" uv run python -m nexus.start
+fi

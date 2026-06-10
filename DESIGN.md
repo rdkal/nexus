@@ -281,7 +281,32 @@ nexus repo:
 
 ---
 
+## Startup on Boot
+
+`install.sh` installs a platform-appropriate service file after cloning and wiring everything up:
+
+| Platform | Mechanism | File |
+|---|---|---|
+| Linux | systemd user service | `~/.config/systemd/user/nexus.service` |
+| macOS | launchd LaunchAgent | `~/Library/LaunchAgents/com.nexus.agent.plist` |
+
+Both run `uv run python -m nexus.start` with `NEXUS_HOME` and `NEXUS_SRC` set.
+
+On Linux, `loginctl enable-linger` is called so the service survives user session logout. If no systemd user session is available (e.g. CI containers), install.sh falls back to `exec`-ing nexus directly — same as before.
+
+To manage the service manually:
+```bash
+# Linux
+systemctl --user status nexus
+systemctl --user restart nexus
+
+# macOS
+launchctl unload ~/Library/LaunchAgents/com.nexus.agent.plist
+launchctl load -w ~/Library/LaunchAgents/com.nexus.agent.plist
+```
+
+---
+
 ## What's Not Covered Yet
 
-- Startup on boot (systemd unit / launchd plist)
 - Config hot-reload for new includes (poller already re-reads config each cycle)
