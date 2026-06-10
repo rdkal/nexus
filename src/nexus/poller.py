@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx
 
 from nexus.config import FlowConfig, IncludeConfig, NexusConfig, load_config
+from nexus.register import register_app_flows
 
 NEXUS_HOME = Path(os.environ.get("NEXUS_HOME", Path.home() / ".nexus"))
 DEFAULT_POLL_INTERVAL = int(os.environ.get("NEXUS_POLL_INTERVAL", 60))
@@ -202,7 +203,7 @@ def update_app(inc: IncludeConfig, nexus_home: Path = NEXUS_HOME) -> bool:
         _remove_worktree(active_dir, staging_dir)
 
         if app_config.flows:
-            print(f"[poller] {inc.name} flows: {list(app_config.flows)} — TODO: re-register")
+            register_app_flows(inc.name, active_dir, app_config, PREFECT_API_URL)
 
         print(f"[poller] {inc.name} deployed")
         return True
@@ -219,6 +220,7 @@ def main():
     config_file = NEXUS_HOME / "config.yaml"
     known: dict[str, str] = {}
     last_checked: dict[str, float] = {}
+    registered: set[str] = set()
     print(f"[poller] Started (default interval: {DEFAULT_POLL_INTERVAL}s)")
 
     while True:
@@ -234,6 +236,18 @@ def main():
             active_dir = NEXUS_HOME / "apps" / inc.name
             if not active_dir.exists():
                 continue
+
+            # Register flows once on startup
+            if inc.name not in registered:
+                registered.add(inc.name)
+                app_nexus = active_dir / "nexus.yaml"
+                if app_nexus.exists():
+                    try:
+                        app_cfg = load_config(app_nexus)
+                        register_app_flows(inc.name, active_dir, app_cfg, PREFECT_API_URL)
+                    except Exception as e:
+                        print(f"[poller] Startup registration error for {inc.name}: {e}")
+
             if now - last_checked.get(inc.name, 0) < inc.poll_interval:
                 continue
             last_checked[inc.name] = now
