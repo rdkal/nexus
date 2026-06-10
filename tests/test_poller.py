@@ -105,7 +105,7 @@ def test_root_gate_pass_allows_deploy(make_app, nexus_home, fake_process_compose
     # Push an update that includes a passing gate
     app.push_update({
         "nexus.yaml": nexus_yaml,
-        "gates/check.py": "def run_check(): pass\n",
+        "gates/check.py": "from prefect import flow\n\n@flow\ndef run_check(): pass\n",
     })
 
     inc = IncludeConfig(name="myapp", repo=str(app.bare))
@@ -131,7 +131,7 @@ def test_root_gate_fail_aborts_deploy(make_app, nexus_home, fake_process_compose
 
     app.push_update({
         "nexus.yaml": nexus_yaml,
-        "gates/check.py": "def run_check(): raise RuntimeError('tests failed')\n",
+        "gates/check.py": "from prefect import flow\n\n@flow\ndef run_check(): raise RuntimeError('tests failed')\n",
     })
 
     inc = IncludeConfig(name="myapp", repo=str(app.bare))
@@ -159,7 +159,7 @@ def test_per_process_gate_fail_aborts(make_app, nexus_home, fake_process_compose
 
     app.push_update({
         "nexus.yaml": nexus_yaml,
-        "gates/check.py": "def run_check(): raise RuntimeError('smoke failed')\n",
+        "gates/check.py": "from prefect import flow\n\n@flow\ndef run_check(): raise RuntimeError('smoke failed')\n",
     })
 
     inc = IncludeConfig(name="myapp", repo=str(app.bare))
@@ -177,3 +177,85 @@ def test_unknown_gate_aborts(make_app, nexus_home, fake_process_compose):
     inc = IncludeConfig(name="myapp", repo=str(app.bare))
     result = update_app(inc, nexus_home=nexus_home)
     assert result is False
+
+
+# ── per-flow deploy gates ─────────────────────────────────────────────────────
+
+def test_per_flow_gate_pass_allows_deploy(make_app, nexus_home, fake_process_compose):
+    """Per-flow gate that passes lets the deploy proceed."""
+    nexus_yaml = textwrap.dedent("""\
+        flows:
+          ingest:
+            entrypoint: flows/ingest.py:run
+            deploy:
+              - check
+          check: gates/check.py:run_check
+    """)
+    app = make_app("myapp", nexus_yaml=nexus_yaml)
+
+    app.push_update({
+        "nexus.yaml": nexus_yaml,
+        "gates/check.py": "from prefect import flow\n\n@flow\ndef run_check(): pass\n",
+        "flows/ingest.py": "from prefect import flow\n\n@flow\ndef run(): pass\n",
+    })
+
+    inc = IncludeConfig(name="myapp", repo=str(app.bare))
+    result = update_app(inc, nexus_home=nexus_home)
+
+    assert result is True
+    assert app.active_sha() == app.remote_sha()
+
+
+def test_per_flow_gate_fail_aborts_deploy(make_app, nexus_home, fake_process_compose):
+    """Per-flow gate failure aborts deploy and keeps current version."""
+    nexus_yaml = textwrap.dedent("""\
+        flows:
+          ingest:
+            entrypoint: flows/ingest.py:run
+            deploy:
+              - check
+          check: gates/check.py:run_check
+    """)
+    app = make_app("myapp", nexus_yaml=nexus_yaml)
+    sha_before = app.active_sha()
+
+    app.push_update({
+        "nexus.yaml": nexus_yaml,
+        "gates/check.py": "from prefect import flow\n\n@flow\ndef run_check(): raise RuntimeError('flow gate failed')\n",
+        "flows/ingest.py": "from prefect import flow\n\n@flow\ndef run(): pass\n",
+    })
+
+    inc = IncludeConfig(name="myapp", repo=str(app.bare))
+    result = update_app(inc, nexus_home=nexus_home)
+
+    assert result is False
+    assert app.active_sha() == sha_before
+
+
+def test_per_flow_gate_runs_before_process_changes(make_app, nexus_home, fake_process_compose):
+    """Per-flow gate failure prevents process stop/start even with processes declared."""
+    nexus_yaml = textwrap.dedent("""\
+        flows:
+          ingest:
+            entrypoint: flows/ingest.py:run
+            deploy:
+              - check
+          check: gates/check.py:run_check
+
+        processes:
+          web: process-compose.yaml
+    """)
+    app = make_app("myapp", nexus_yaml=nexus_yaml)
+    fake_process_compose.processes = ["myapp-web"]
+
+    app.push_update({
+        "nexus.yaml": nexus_yaml,
+        "gates/check.py": "from prefect import flow\n\n@flow\ndef run_check(): raise RuntimeError('flow gate failed')\n",
+        "flows/ingest.py": "from prefect import flow\n\n@flow\ndef run(): pass\n",
+    })
+
+    inc = IncludeConfig(name="myapp", repo=str(app.bare))
+    result = update_app(inc, nexus_home=nexus_home)
+
+    assert result is False
+    assert fake_process_compose.stopped == []

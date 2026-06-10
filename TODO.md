@@ -50,9 +50,9 @@ Status legend: ✅ Done · ⚠️ Partial · ❌ Not done
 | Root deploy gates pass → deploy proceeds | ✅ | ✅ | ✅ |
 | Root deploy gate fails → deploy aborted, current version kept | ✅ | ✅ | ✅ |
 | Per-process deploy gates | ✅ | ✅ | ✅ |
-| Per-flow deploy gates | ✅ | ✅ | ❌ |
+| Per-flow deploy gates | ✅ | ✅ | ✅ |
 | Unknown gate name aborts deploy | ✅ | ✅ | ✅ |
-| Process stop → git reset → uv sync → process start | ✅ | ✅ | ✅ |
+| process stop → git reset → uv sync → process start | ✅ | ✅ | ✅ (real PC) |
 | Flows-only app (skip process stop/start) | ✅ | ✅ | ✅ |
 | Staging worktree cleanup on success and failure | ✅ | ✅ | ✅ |
 | **Prefect flow auto-registration** | ✅ | ❌ | ❌ |
