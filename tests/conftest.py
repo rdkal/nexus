@@ -314,3 +314,39 @@ def running_nexus(tmp_path_factory):
     yield home
 
     _kill_group(proc)
+
+
+# ── subprocess call timing ────────────────────────────────────────────────────
+
+_subprocess_calls: list[tuple[str, str, float]] = []  # (nodeid, label, secs)
+
+
+@pytest.fixture(autouse=True)
+def _time_subprocesses(monkeypatch, request):
+    original = subprocess.run
+
+    def _timed(*args, **kwargs):
+        cmd = args[0] if args else kwargs.get("args", [])
+        if isinstance(cmd, (list, tuple)):
+            parts = [str(x) for x in cmd]
+            label = " ".join(parts[:4]) + (" …" if len(parts) > 4 else "")
+        else:
+            label = str(cmd)[:60]
+        t0 = time.perf_counter()
+        result = original(*args, **kwargs)
+        elapsed = time.perf_counter() - t0
+        if elapsed > 0.3:
+            _subprocess_calls.append((request.node.nodeid, label, elapsed))
+        return result
+
+    monkeypatch.setattr(subprocess, "run", _timed)
+    yield
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    if not _subprocess_calls:
+        return
+    terminalreporter.write_sep("=", "slowest subprocess calls (> 0.3 s)")
+    for nodeid, label, secs in sorted(_subprocess_calls, key=lambda x: -x[2])[:20]:
+        short = nodeid.split("::")[-1]
+        terminalreporter.write_line(f"  {secs:5.2f}s  {label}  [{short}]")
