@@ -145,14 +145,71 @@ class FakeProcessCompose:
     started: list[str] = field(default_factory=list)
 
 
+# ── shared Prefect server — started once per session ─────────────────────────
+
+@dataclass
+class PrefectServer:
+    api_url: str
+
+
+@pytest.fixture(scope="session")
+def prefect_server(tmp_path_factory):
+    """
+    Start one Prefect server for the whole test session so gate flows connect
+    over HTTP rather than each spawning their own ephemeral server (~20 s each).
+    """
+    prefect_home = tmp_path_factory.mktemp("prefect")
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    api_url = f"http://127.0.0.1:{port}/api"
+
+    proc = subprocess.Popen(
+        ["uv", "run", "prefect", "server", "start",
+         "--host", "127.0.0.1", "--port", str(port)],
+        env={**os.environ, "PREFECT_HOME": str(prefect_home)},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    deadline = time.monotonic() + 90
+    ready = False
+    while time.monotonic() < deadline:
+        try:
+            if httpx.get(f"{api_url}/health", timeout=1).status_code == 200:
+                ready = True
+                break
+        except Exception:
+            pass
+        time.sleep(0.5)
+
+    if not ready:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except Exception:
+            pass
+        pytest.fail("Prefect server did not start within 90 s")
+
+    yield PrefectServer(api_url=api_url)
+
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        proc.wait(timeout=10)
+    except Exception:
+        pass
+
+
 @pytest.fixture
-def fake_process_compose(monkeypatch, tmp_path):
+def fake_process_compose(monkeypatch, tmp_path, prefect_server):
     """
     Replaces the three process-compose API functions in poller with in-memory
     fakes. Prepopulate `fake.processes` with names the poller should see.
 
-    Also patches PREFECT_API_URL to empty so gate flows run in Prefect's local
-    ephemeral mode — no server required.
+    Points PREFECT_API_URL at the session-scoped Prefect server so gate flows
+    connect over HTTP rather than spinning up an ephemeral server each time.
     """
     import nexus.poller as poller_mod
 
@@ -170,9 +227,8 @@ def fake_process_compose(monkeypatch, tmp_path):
         poller_mod, "start_process",
         lambda name: fake.started.append(name),
     )
-    monkeypatch.setattr(poller_mod, "PREFECT_API_URL", "")
+    monkeypatch.setattr(poller_mod, "PREFECT_API_URL", prefect_server.api_url)
     monkeypatch.setenv("PREFECT_HOME", str(tmp_path / "prefect"))
-    monkeypatch.setenv("PREFECT_SERVER_ALLOW_EPHEMERAL_MODE", "1")
     return fake
 
 
