@@ -46,12 +46,22 @@ Each included repo has its own `nexus.yaml` at its root.
 project: my-project
 
 includes:
-  api:                               # name → namespace and base path /api
-    repo: https://github.com/org/api
-    branch: main                     # optional, default: main
-    poll_interval: 30                # optional seconds, default: 60
+  # Shorthand: schema-less host/path, optional @ref suffix (branch or tag)
+  api: github.com/org/api@v1.4.0
 
-  workers: https://github.com/org/workers   # shorthand: plain string URL
+  # Full form: same repo syntax, plus poll_interval and env injection
+  workers:
+    repo: github.com/org/workers@main   # @ref is the only way to set the ref
+    poll_interval: 30                   # optional seconds, default: 60
+    env:                                # injected into this app's processes
+      WORKERS_CONCURRENCY: "4"
+
+  # Community/shared modules work the same way
+  postgres:
+    repo: github.com/community/nexus-postgres@v2.1.0
+    env:
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: mydb
 
 # Root-level flows and processes are also valid:
 flows:
@@ -60,6 +70,22 @@ flows:
 processes:
   infra: infra-compose.yaml
 ```
+
+**Repo location format** — `host/owner/repo[@ref]`:
+
+| String | ref |
+|---|---|
+| `github.com/org/api` | `main` |
+| `github.com/org/api@v1.2.3` | `v1.2.3` |
+| `github.com/org/api@develop` | `develop` |
+| `/local/path/to/repo` | `main` |
+| `/local/path/to/repo@feature` | `feature` |
+
+No scheme is part of the format. How the identifier resolves to a cloneable URL is an implementation detail — nexus tries HTTPS first, then SSH, and uses the first that succeeds.
+
+`ref` can be a branch name or a tag name. Nexus resolves both — tags are checked via `refs/tags/` in `ls-remote` and fetched with `git fetch origin <ref>`.
+
+**`env:` injection** — key/value pairs in the full include form are forwarded into the `process-compose` environment when nexus starts, making them available to all of that app's processes. They are also set when deploy-gate flows run in the staging worktree.
 
 ### App nexus.yaml (inside an included repo)
 

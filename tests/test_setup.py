@@ -33,8 +33,8 @@ def test_update_existing_clone(make_app, nexus_home):
     assert app.active_sha() == new_sha
 
 
-def test_clone_respects_branch(make_app, nexus_home, tmp_path):
-    """clone_or_update checks out the requested branch."""
+def test_clone_respects_ref(make_app, nexus_home, tmp_path):
+    """clone_or_update checks out the requested ref (branch or tag)."""
     app = make_app("myapp")
     bare = app.bare
     scratch = app._scratch
@@ -46,7 +46,7 @@ def test_clone_respects_branch(make_app, nexus_home, tmp_path):
                    check=True, capture_output=True)
 
     dest = nexus_home / "apps" / "feature-clone"
-    inc = IncludeConfig(name="feature-clone", repo=str(bare), branch="feature")
+    inc = IncludeConfig(name="feature-clone", repo=str(bare), ref="feature")
     clone_or_update(inc, dest)
 
     branch = subprocess.run(

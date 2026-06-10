@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from nexus.config import FlowConfig, NexusConfig, ProcessConfig, load_config
+from nexus.config import FlowConfig, NexusConfig, ProcessConfig, _parse_repo, load_config
 
 
 @pytest.fixture
@@ -15,6 +15,56 @@ def cfg(tmp_path):
         p.write_text(textwrap.dedent(text))
         return load_config(p)
     return _load
+
+
+# ── _parse_repo ───────────────────────────────────────────────────────────────
+
+def test_parse_repo_schema_less():
+    url, ref = _parse_repo("github.com/org/api")
+    assert url == "github.com/org/api"
+    assert ref == "main"
+
+
+def test_parse_repo_at_ref():
+    url, ref = _parse_repo("github.com/org/api@v1.2.3")
+    assert url == "github.com/org/api"
+    assert ref == "v1.2.3"
+
+
+def test_parse_repo_at_branch():
+    url, ref = _parse_repo("github.com/org/api@develop")
+    assert url == "github.com/org/api"
+    assert ref == "develop"
+
+
+def test_parse_repo_https_scheme_stripped():
+    url, ref = _parse_repo("https://github.com/org/api")
+    assert url == "github.com/org/api"
+    assert ref == "main"
+
+
+def test_parse_repo_https_scheme_stripped_with_ref():
+    url, ref = _parse_repo("https://github.com/org/api@stable")
+    assert url == "github.com/org/api"
+    assert ref == "stable"
+
+
+def test_parse_repo_ssh_url_normalised():
+    url, ref = _parse_repo("git@github.com:org/api")
+    assert url == "github.com/org/api"
+    assert ref == "main"
+
+
+def test_parse_repo_local_path():
+    url, ref = _parse_repo("/home/user/myrepo")
+    assert url == "/home/user/myrepo"
+    assert ref == "main"
+
+
+def test_parse_repo_local_path_with_ref():
+    url, ref = _parse_repo("/home/user/myrepo@feature")
+    assert url == "/home/user/myrepo"
+    assert ref == "feature"
 
 
 # ── root config ───────────────────────────────────────────────────────────────
@@ -32,14 +82,26 @@ def test_include_shorthand(cfg):
     c = cfg("""
         project: p
         includes:
-          api: https://github.com/org/api
+          api: github.com/org/api
     """)
     assert len(c.includes) == 1
     inc = c.includes[0]
     assert inc.name == "api"
-    assert inc.repo == "https://github.com/org/api"
-    assert inc.branch == "main"
+    assert inc.repo == "github.com/org/api"
+    assert inc.ref == "main"
     assert inc.poll_interval == 60
+    assert inc.env == {}
+
+
+def test_include_shorthand_with_ref(cfg):
+    c = cfg("""
+        project: p
+        includes:
+          api: github.com/org/api@v2.0.0
+    """)
+    inc = c.includes[0]
+    assert inc.repo == "github.com/org/api"
+    assert inc.ref == "v2.0.0"
 
 
 def test_include_full_form(cfg):
@@ -47,26 +109,50 @@ def test_include_full_form(cfg):
         project: p
         includes:
           api:
-            repo: https://github.com/org/api
-            branch: develop
+            repo: github.com/org/api@develop
             poll_interval: 30
     """)
     inc = c.includes[0]
-    assert inc.branch == "develop"
+    assert inc.repo == "github.com/org/api"
+    assert inc.ref == "develop"
     assert inc.poll_interval == 30
+
+
+def test_include_full_form_with_env(cfg):
+    c = cfg("""
+        project: p
+        includes:
+          postgres:
+            repo: github.com/community/nexus-postgres@v1.0.0
+            env:
+              POSTGRES_PASSWORD: secret
+              POSTGRES_DB: mydb
+    """)
+    inc = c.includes[0]
+    assert inc.ref == "v1.0.0"
+    assert inc.env == {"POSTGRES_PASSWORD": "secret", "POSTGRES_DB": "mydb"}
+
+
+def test_include_env_absent_is_empty(cfg):
+    c = cfg("""
+        project: p
+        includes:
+          api:
+            repo: github.com/org/api
+    """)
+    assert c.includes[0].env == {}
 
 
 def test_multiple_includes(cfg):
     c = cfg("""
         project: p
         includes:
-          api: https://github.com/org/api
-          workers:
-            repo: https://github.com/org/workers
-            branch: staging
+          api: github.com/org/api
+          workers: github.com/org/workers@staging
     """)
     names = [i.name for i in c.includes]
     assert names == ["api", "workers"]
+    assert c.includes[1].ref == "staging"
 
 
 # ── flows ─────────────────────────────────────────────────────────────────────

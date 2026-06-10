@@ -32,6 +32,7 @@ def build_env(nexus_home: Path, nexus_src: Path, config: NexusConfig) -> dict:
         key = f"NEXUS_APP_{inc.name.upper().replace('-', '_')}_DIR"
         env[key] = str(nexus_home / "apps" / inc.name)
         env[f"NEXUS_BASE_PATH_{inc.name.upper().replace('-', '_')}"] = f"/{inc.name}"
+        env.update(inc.env)
     return env
 
 
