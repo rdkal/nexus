@@ -23,6 +23,18 @@ def collect_compose_files(nexus_home: Path, nexus_src: Path, config: NexusConfig
     return files
 
 
+def build_env(nexus_home: Path, nexus_src: Path, config: NexusConfig) -> dict:
+    env = os.environ.copy()
+    env["NEXUS_HOME"] = str(nexus_home)
+    env["NEXUS_SRC"] = str(nexus_src)
+    env["PREFECT_API_URL"] = "http://localhost:4200/api"
+    for inc in config.includes:
+        key = f"NEXUS_APP_{inc.name.upper().replace('-', '_')}_DIR"
+        env[key] = str(nexus_home / "apps" / inc.name)
+        env[f"NEXUS_BASE_PATH_{inc.name.upper().replace('-', '_')}"] = f"/{inc.name}"
+    return env
+
+
 def main():
     nexus_home = Path(os.environ.get("NEXUS_HOME", Path.home() / ".nexus"))
     nexus_src = Path(os.environ.get("NEXUS_SRC", Path(__file__).parent.parent.parent))
@@ -35,15 +47,7 @@ def main():
         cmd += ["-f", f]
     cmd += ["-p", "9080", "-t=false"]
 
-    env = os.environ.copy()
-    env["NEXUS_HOME"] = str(nexus_home)
-    env["NEXUS_SRC"] = str(nexus_src)
-    env["PREFECT_API_URL"] = "http://localhost:4200/api"
-
-    for inc in config.includes:
-        key = f"NEXUS_APP_{inc.name.upper().replace('-', '_')}_DIR"
-        env[key] = str(nexus_home / "apps" / inc.name)
-        env[f"NEXUS_BASE_PATH_{inc.name.upper().replace('-', '_')}"] = f"/{inc.name}"
+    env = build_env(nexus_home, nexus_src, config)
 
     print(f"[start] Launching with {len(compose_files)} compose file(s)...")
     print("[start] Nexus UI  → http://localhost:8080")

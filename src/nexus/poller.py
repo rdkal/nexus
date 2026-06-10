@@ -218,6 +218,7 @@ def update_app(inc: IncludeConfig, nexus_home: Path = NEXUS_HOME) -> bool:
 def main():
     config_file = NEXUS_HOME / "config.yaml"
     known: dict[str, str] = {}
+    last_checked: dict[str, float] = {}
     print(f"[poller] Started (default interval: {DEFAULT_POLL_INTERVAL}s)")
 
     while True:
@@ -228,10 +229,14 @@ def main():
             time.sleep(DEFAULT_POLL_INTERVAL)
             continue
 
+        now = time.monotonic()
         for inc in config.includes:
             active_dir = NEXUS_HOME / "apps" / inc.name
             if not active_dir.exists():
                 continue
+            if now - last_checked.get(inc.name, 0) < inc.poll_interval:
+                continue
+            last_checked[inc.name] = now
             try:
                 rhead = remote_head(active_dir, inc.branch)
                 lhead = known.get(inc.name) or local_head(active_dir)
@@ -244,7 +249,7 @@ def main():
             except Exception as e:
                 print(f"[poller] Error checking {inc.name}: {e}")
 
-        time.sleep(DEFAULT_POLL_INTERVAL)
+        time.sleep(5)
 
 
 if __name__ == "__main__":
