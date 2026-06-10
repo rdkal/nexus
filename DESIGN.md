@@ -151,7 +151,9 @@ processes:
 |---|---|
 | `NEXUS_HOME` | `~/.nexus` |
 | `NEXUS_SRC` | path to nexus source |
+| `NEXUS_PORT` | nexus-web listen port (default `8080`) |
 | `PREFECT_API_URL` | `http://localhost:4200/api` |
+| `PREFECT_UI_URL` | Prefect UI origin shown on the portal (default `http://localhost:4200`) |
 | `NEXUS_APP_<NAME>_DIR` | absolute path to that app's cloned repo |
 | `NEXUS_BASE_PATH_<NAME>` | `/<name>` — app's base URL path |
 
@@ -227,7 +229,8 @@ All processes inherit `PREFECT_API_URL=http://localhost:4200/api`.
 ### Deployment naming
 
 Prefect rejects slashes in names, so the Prefect deployment name is
-`{app-name}-{flow-name}` (hyphen-joined). The underlying Prefect flow record
+`{app-name}-{flow-name}` (hyphen-joined). Any remaining slashes in either
+part are also replaced with hyphens. The underlying Prefect flow record
 uses the Python function name from the entrypoint.
 
 Example: `flows/ingest.py:ingest_flow` in app `api` with nexus flow name
