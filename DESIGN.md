@@ -151,7 +151,9 @@ processes:
 |---|---|
 | `NEXUS_HOME` | `~/.nexus` |
 | `NEXUS_SRC` | path to nexus source |
+| `NEXUS_PORT` | nexus-web listen port (default `8080`) |
 | `PREFECT_API_URL` | `http://localhost:4200/api` |
+| `PREFECT_UI_URL` | Prefect UI origin shown on the portal (default `http://localhost:4200`) |
 | `NEXUS_APP_<NAME>_DIR` | absolute path to that app's cloned repo |
 | `NEXUS_BASE_PATH_<NAME>` | `/<name>` — app's base URL path |
 
@@ -181,7 +183,7 @@ load staging/nexus.yaml
   stop process-compose processes  (skipped if app has no processes)
   git reset --hard + uv sync in active dir
   start process-compose processes
-  (re-register Prefect flows — TODO)
+  re-register Prefect deployments (register.py)
   remove staging worktree
 ```
 
@@ -218,14 +220,35 @@ def run_all():
 
 ## Prefect Flows
 
-Apps declare flows in their `nexus.yaml`. Nexus loads and tracks them.
-Since all apps share one Prefect server, flows can reference each other by name
-using the namespaced path `<app-name>/<flow-name>`.
+Apps declare flows in their `nexus.yaml`. On startup and after every successful
+deploy, `nexus.register` upserts each declared flow as a Prefect deployment on
+the shared server via the Prefect REST API.
 
 All processes inherit `PREFECT_API_URL=http://localhost:4200/api`.
 
-**Planned**: nexus will auto-register declared flows as Prefect deployments on
-startup and on each app update (using the `file:function` entrypoints).
+### Deployment naming
+
+Prefect rejects slashes in names, so the Prefect deployment name is
+`{app-name}-{flow-name}` (hyphen-joined). Any remaining slashes in either
+part are also replaced with hyphens. The underlying Prefect flow record
+uses the Python function name from the entrypoint.
+
+Example: `flows/ingest.py:ingest_flow` in app `api` with nexus flow name
+`ingest` → Prefect flow `ingest_flow`, deployment name `api-ingest`.
+
+### Behavior during live updates
+
+Re-registration upserts the deployment record (updating `path` and `entrypoint`
+to the newly-deployed active dir). It does **not** affect in-flight runs:
+
+| Run state at re-registration | Behaviour |
+|---|---|
+| Already executing in worker | Finishes on old code — unaffected |
+| Queued (Scheduled, not yet picked up) | Worker loads new code at pickup |
+| New triggers / scheduled after deploy | Always use new code |
+
+This is the right default for a single-machine setup: running work is never
+interrupted, and new work always gets the latest version.
 
 ---
 
@@ -251,6 +274,7 @@ nexus repo:
         ├── config.py    ← nexus.yaml parsing (root + app format)
         ├── web.py       ← FastAPI portal page (port 8080)
         ├── poller.py    ← git polling, deploy pipeline
+        ├── register.py  ← upserts Prefect deployments via REST API
         ├── setup.py     ← initial app cloning
         └── start.py     ← builds + execs process-compose command
 ```
@@ -260,5 +284,4 @@ nexus repo:
 ## What's Not Covered Yet
 
 - Startup on boot (systemd unit / launchd plist)
-- Prefect flow auto-registration (entrypoints from nexus.yaml → Prefect deployments)
 - Config hot-reload for new includes (poller already re-reads config each cycle)

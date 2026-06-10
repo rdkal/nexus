@@ -43,7 +43,7 @@ Status legend: ✅ Done · ⚠️ Partial · ❌ Not done
 | Returns False when active dir missing | ✅ | ✅ | ✅ |
 | Re-reads config.yaml each cycle | ✅ | ✅ | ❌ |
 | Per-app poll_interval | ✅ | ✅ | ❌ |
-| **Deploy pipeline** | ✅ | ✅ | ⚠️ |
+| **Deploy pipeline** | ✅ | ✅ | ✅ |
 | Staging worktree (app.next) | ✅ | ✅ | ✅ |
 | uv sync in staging | ✅ | ✅ | ✅ |
 | No nexus.yaml in repo aborts deploy | ✅ | ✅ | ✅ |
@@ -55,8 +55,10 @@ Status legend: ✅ Done · ⚠️ Partial · ❌ Not done
 | process stop → git reset → uv sync → process start | ✅ | ✅ | ✅ (real PC) |
 | Flows-only app (skip process stop/start) | ✅ | ✅ | ✅ |
 | Staging worktree cleanup on success and failure | ✅ | ✅ | ✅ |
-| **Prefect flow auto-registration** | ✅ | ❌ | ❌ |
-| Register declared flows as deployments on startup | ✅ | ❌ | ❌ |
-| Re-register flows after app update | ✅ | ❌ | ❌ |
+| **Prefect flow auto-registration** | ✅ | ✅ | ✅ |
+| Register declared flows as deployments on startup | ✅ | ✅ | ✅ |
+| Re-register flows after app update | ✅ | ✅ | ✅ |
+| Deployment naming: `{app-name}-{flow-name}` (Prefect rejects slashes) | ✅ | ✅ | ✅ |
+| In-flight runs finish on old code; queued/new runs get new code | ✅ | ✅ | ❌ |
 | **Startup on boot** | ❌ | ❌ | ❌ |
 | systemd unit / launchd plist | ❌ | ❌ | ❌ |

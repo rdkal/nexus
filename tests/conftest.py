@@ -193,6 +193,17 @@ def prefect_server(tmp_path_factory):
             pass
         pytest.fail("Prefect server did not start within 90 s")
 
+    # Create the nexus-pool work pool that deployments reference
+    try:
+        httpx.post(
+            f"{api_url}/work_pools",
+            json={"name": "nexus-pool", "type": "process"},
+            timeout=10,
+            follow_redirects=True,
+        )
+    except Exception:
+        pass  # may already exist on re-use
+
     yield PrefectServer(api_url=api_url)
 
     try:
