@@ -1,11 +1,14 @@
 import os
+import shutil
 import signal
 import socket
 import subprocess
+import textwrap
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import httpx
 import pytest
 
 REPO_ROOT = Path(__file__).parent.parent
@@ -171,6 +174,84 @@ def fake_process_compose(monkeypatch, tmp_path):
     monkeypatch.setenv("PREFECT_HOME", str(tmp_path / "prefect"))
     monkeypatch.setenv("PREFECT_SERVER_ALLOW_EPHEMERAL_MODE", "1")
     return fake
+
+
+# ── real_process_compose — live process-compose server for integration tests ──
+
+@dataclass
+class RealProcessCompose:
+    port: int
+
+
+@pytest.fixture
+def real_process_compose(tmp_path, monkeypatch):
+    """
+    Start a real process-compose server with test processes and point the
+    poller at it.  Skipped if the binary isn't on PATH.
+
+    Processes exposed:
+        myapp-web, myapp-worker  (sleep 3600, stoppable/restartable)
+        _sentinel                (sleep 86400, keeps PC alive while others stop)
+
+    After stop: status == "Completed", is_running == False
+    After start: status == "Running",  is_running == True
+    """
+    pc_bin = shutil.which("process-compose")
+    if pc_bin is None:
+        pytest.skip("process-compose not found")
+
+    with socket.socket() as s:
+        s.bind(("", 0))
+        port = s.getsockname()[1]
+
+    pc_yaml = tmp_path / "processes.yaml"
+    pc_yaml.write_text(textwrap.dedent("""\
+        version: "0.5"
+        processes:
+          _sentinel:
+            command: sleep 86400
+          myapp-web:
+            command: sleep 3600
+          myapp-worker:
+            command: sleep 3600
+    """))
+
+    proc = subprocess.Popen(
+        [pc_bin, "-f", str(pc_yaml), "-p", str(port), "-t=false", "up"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    deadline = time.monotonic() + 30
+    ready = False
+    while time.monotonic() < deadline:
+        try:
+            if httpx.get(f"http://localhost:{port}/processes", timeout=1).status_code == 200:
+                ready = True
+                break
+        except Exception:
+            pass
+        time.sleep(0.25)
+
+    if not ready:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except Exception:
+            pass
+        pytest.fail("process-compose did not start within 30s")
+
+    import nexus.poller as poller_mod
+    monkeypatch.setattr(poller_mod, "PC_PORT", port)
+    monkeypatch.setattr(poller_mod, "PC_BASE", f"http://localhost:{port}")
+
+    yield RealProcessCompose(port=port)
+
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        proc.wait(timeout=5)
+    except Exception:
+        pass
 
 
 # ── E2E fixture — runs the full install.sh and waits for port 8080 ────────────

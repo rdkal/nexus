@@ -52,7 +52,7 @@ Status legend: ✅ Done · ⚠️ Partial · ❌ Not done
 | Per-process deploy gates | ✅ | ✅ | ✅ |
 | Per-flow deploy gates | ✅ | ✅ | ✅ |
 | Unknown gate name aborts deploy | ✅ | ✅ | ✅ |
-| Process stop → git reset → uv sync → process start | ✅ | ✅ | ✅ |
+| process stop → git reset → uv sync → process start | ✅ | ✅ | ✅ (real PC) |
 | Flows-only app (skip process stop/start) | ✅ | ✅ | ✅ |
 | Staging worktree cleanup on success and failure | ✅ | ✅ | ✅ |
 | **Prefect flow auto-registration** | ✅ | ❌ | ❌ |
