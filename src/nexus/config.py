@@ -59,7 +59,8 @@ class NexusConfig:
     includes: list[IncludeConfig]
     flows: dict[str, FlowConfig]
     processes: dict[str, ProcessConfig]
-    deploy: list[str] = field(default_factory=list)   # root gates (flow names)
+    deploy: list[str] = field(default_factory=list)    # root gates (flow names)
+    env: dict[str, str] = field(default_factory=dict)  # root env, visible to all apps
 
 
 def _parse_flow(val: str | dict) -> FlowConfig:
@@ -104,4 +105,5 @@ def load_config(path: Path) -> NexusConfig:
         flows={k: _parse_flow(v) for k, v in data.get("flows", {}).items()},
         processes={k: _parse_process(v) for k, v in data.get("processes", {}).items()},
         deploy=data.get("deploy") or [],
+        env=data.get("env") or {},
     )

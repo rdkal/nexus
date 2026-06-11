@@ -1,4 +1,9 @@
 """Integration tests for process-compose HTTP API — uses a real process-compose server."""
+import os
+import shutil
+import signal
+import subprocess
+import textwrap
 import time
 
 import httpx
@@ -103,3 +108,53 @@ def test_update_app_stops_and_restarts_real_processes(
 
     assert _wait_running(port, "myapp-web"),    "myapp-web should be running after deploy"
     assert _wait_running(port, "myapp-worker"), "myapp-worker should be running after deploy"
+
+
+# ── env vars reach spawned processes ─────────────────────────────────────────
+
+def test_env_vars_reach_process_compose_processes(tmp_path):
+    """
+    Env vars passed to process-compose are visible inside the processes it spawns.
+
+    This exercises the same code path as build_env + os.execvpe in start.py:
+    nexus injects root/include env vars into the process-compose environment,
+    and process-compose inherits that environment to every child process.
+    """
+    pc_bin = shutil.which("process-compose")
+    if pc_bin is None:
+        pytest.skip("process-compose not found")
+
+    output_file = tmp_path / "env_output.txt"
+    pc_yaml = tmp_path / "env-test.yaml"
+    pc_yaml.write_text(textwrap.dedent(f"""\
+        version: "0.5"
+        processes:
+          _sentinel:
+            command: sleep 86400
+          write-env:
+            command: sh -c 'printf "%s" "$NEXUS_TEST_VAR" > {output_file}'
+    """))
+
+    env = {**os.environ, "NEXUS_TEST_VAR": "hello-from-nexus"}
+    proc = subprocess.Popen(
+        [pc_bin, "-f", str(pc_yaml), "-t=false", "up"],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if output_file.exists() and output_file.read_text():
+            break
+        time.sleep(0.2)
+
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        proc.wait(timeout=5)
+    except Exception:
+        pass
+
+    assert output_file.exists(), "write-env process never ran"
+    assert output_file.read_text() == "hello-from-nexus"

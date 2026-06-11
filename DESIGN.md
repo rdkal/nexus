@@ -45,23 +45,28 @@ Each included repo has its own `nexus.yaml` at its root.
 ```yaml
 project: my-project
 
+# Root-level env: visible to ALL processes across ALL apps.
+# Use for shared values like hostnames, ports, credentials.
+env:
+  POSTGRES_HOST: localhost
+  POSTGRES_PORT: "5432"
+  POSTGRES_PASSWORD: secret
+
 includes:
   # Shorthand: schema-less host/path, optional @ref suffix (branch or tag)
   api: github.com/org/api@v1.4.0
 
-  # Full form: same repo syntax, plus poll_interval and env injection
+  # Full form: same repo syntax, plus poll_interval and per-include env
   workers:
     repo: github.com/org/workers@main   # @ref is the only way to set the ref
     poll_interval: 30                   # optional seconds, default: 60
-    env:                                # injected into this app's processes
+    env:                                # merged on top of root env for this app only
       WORKERS_CONCURRENCY: "4"
 
-  # Community/shared modules work the same way
+  # Community/shared modules work the same way; they just read standard env vars
   postgres:
     repo: github.com/community/nexus-postgres@v2.1.0
-    env:
-      POSTGRES_PASSWORD: secret
-      POSTGRES_DB: mydb
+    # POSTGRES_PASSWORD, POSTGRES_PORT already set at root — no need to repeat them
 
 # Root-level flows and processes are also valid:
 flows:
@@ -70,6 +75,16 @@ flows:
 processes:
   infra: infra-compose.yaml
 ```
+
+**Environment variable precedence** (later wins):
+
+```
+system environment
+  → root env:   (nexus.yaml top-level)
+    → include env:   (per-include, can override root)
+```
+
+A value set at root is visible to every app. A per-include `env:` key overrides the root value for that app only.
 
 **Repo location format** — `host/owner/repo[@ref]`:
 

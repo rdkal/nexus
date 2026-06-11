@@ -76,6 +76,27 @@ def test_root_minimal(cfg):
     assert c.flows == {}
     assert c.processes == {}
     assert c.deploy == []
+    assert c.env == {}
+
+
+def test_root_env(cfg):
+    c = cfg("""
+        project: p
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: "5432"
+    """)
+    assert c.env == {"POSTGRES_HOST": "localhost", "POSTGRES_PORT": "5432"}
+
+
+def test_root_env_absent_is_empty(cfg):
+    c = cfg("project: p\n")
+    assert c.env == {}
+
+
+def test_root_env_null_is_empty(cfg):
+    c = cfg("env:\n")
+    assert c.env == {}
 
 
 def test_include_shorthand(cfg):

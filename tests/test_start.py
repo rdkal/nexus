@@ -12,6 +12,7 @@ def _config(**kwargs) -> NexusConfig:
         flows=kwargs.get("flows", {}),
         processes=kwargs.get("processes", {}),
         deploy=kwargs.get("deploy", []),
+        env=kwargs.get("env", {}),
     )
 
 
@@ -114,3 +115,31 @@ def test_build_env_no_includes_has_no_app_keys(tmp_path):
     env = build_env(tmp_path, tmp_path, _config())
     assert not any(k.startswith("NEXUS_APP_") for k in env)
     assert not any(k.startswith("NEXUS_BASE_PATH_") for k in env)
+
+
+def test_build_env_injects_root_env(tmp_path):
+    config = _config(env={"POSTGRES_HOST": "localhost", "POSTGRES_PORT": "5432"})
+    env = build_env(tmp_path, tmp_path, config)
+    assert env["POSTGRES_HOST"] == "localhost"
+    assert env["POSTGRES_PORT"] == "5432"
+
+
+def test_build_env_include_env_overrides_root(tmp_path):
+    config = _config(
+        env={"POSTGRES_PORT": "5432"},
+        includes=[IncludeConfig(name="api", repo="r", env={"POSTGRES_PORT": "5433"})],
+    )
+    env = build_env(tmp_path, tmp_path, config)
+    assert env["POSTGRES_PORT"] == "5433"
+
+
+def test_build_env_root_env_visible_to_all_includes(tmp_path):
+    config = _config(
+        env={"SHARED_SECRET": "abc"},
+        includes=[
+            IncludeConfig(name="api", repo="r"),
+            IncludeConfig(name="worker", repo="r"),
+        ],
+    )
+    env = build_env(tmp_path, tmp_path, config)
+    assert env["SHARED_SECRET"] == "abc"

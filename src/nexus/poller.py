@@ -174,7 +174,11 @@ def start_process(name: str) -> None:
 
 # ── update orchestration ──────────────────────────────────────────────────────
 
-def update_app(inc: IncludeConfig, nexus_home: Path = NEXUS_HOME) -> bool:
+def update_app(
+    inc: IncludeConfig,
+    nexus_home: Path = NEXUS_HOME,
+    root_env: dict | None = None,
+) -> bool:
     active_dir = nexus_home / "apps" / inc.name
     staging_dir = nexus_home / "apps" / f"{inc.name}.next"
 
@@ -194,7 +198,9 @@ def update_app(inc: IncludeConfig, nexus_home: Path = NEXUS_HOME) -> bool:
 
         app_config = load_config(app_nexus)
 
-        if not all_gates_pass(staging_dir, app_config, inc.name, extra_env=inc.env):
+        # Merge: root env → include env (include wins on conflict)
+        gate_env = {**(root_env or {}), **inc.env}
+        if not all_gates_pass(staging_dir, app_config, inc.name, extra_env=gate_env):
             _remove_worktree(active_dir, staging_dir)
             return False
 
@@ -269,7 +275,7 @@ def main():
                 lhead = known.get(inc.name) or local_head(active_dir)
                 if rhead and rhead != lhead:
                     print(f"[poller] Change in {inc.name}: {lhead[:8]} → {rhead[:8]}")
-                    if update_app(inc):
+                    if update_app(inc, root_env=config.env):
                         known[inc.name] = rhead
                 else:
                     known[inc.name] = lhead

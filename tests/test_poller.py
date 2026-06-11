@@ -259,3 +259,59 @@ def test_per_flow_gate_runs_before_process_changes(make_app, nexus_home, fake_pr
 
     assert result is False
     assert fake_process_compose.stopped == []
+
+
+# ── env var injection into gates ──────────────────────────────────────────────
+
+_CHECK_ENV_FLOW = (
+    "import os\n"
+    "from prefect import flow\n\n"
+    "@flow\n"
+    "def check_env():\n"
+    "    val = os.environ.get('NEXUS_TEST_VAR')\n"
+    "    assert val == 'hello', f'NEXUS_TEST_VAR={val!r}'\n"
+)
+
+_ENV_GATE_NEXUS_YAML = textwrap.dedent("""\
+    deploy:
+      - check-env
+    flows:
+      check-env: flows/check_env.py:check_env
+""")
+
+
+def test_root_env_missing_causes_gate_failure(make_app, nexus_home, fake_process_compose):
+    """A gate that reads a root env var fails when the var is not provided."""
+    app = make_app("env-gate-app", nexus_yaml=_ENV_GATE_NEXUS_YAML)
+    app.push_update({"flows/check_env.py": _CHECK_ENV_FLOW})
+
+    inc = IncludeConfig(name="env-gate-app", repo=str(app.bare))
+    result = update_app(inc, nexus_home, root_env={})
+
+    assert result is False
+
+
+def test_root_env_visible_in_gate_subprocess(make_app, nexus_home, fake_process_compose):
+    """Root env vars are forwarded into gate flow subprocesses and can be read."""
+    app = make_app("env-gate-app", nexus_yaml=_ENV_GATE_NEXUS_YAML)
+    app.push_update({"flows/check_env.py": _CHECK_ENV_FLOW})
+
+    inc = IncludeConfig(name="env-gate-app", repo=str(app.bare))
+    result = update_app(inc, nexus_home, root_env={"NEXUS_TEST_VAR": "hello"})
+
+    assert result is True
+
+
+def test_include_env_overrides_root_in_gate(make_app, nexus_home, fake_process_compose):
+    """Per-include env wins over root env inside gate subprocesses."""
+    app = make_app("env-gate-app", nexus_yaml=_ENV_GATE_NEXUS_YAML)
+    app.push_update({"flows/check_env.py": _CHECK_ENV_FLOW})
+
+    inc = IncludeConfig(
+        name="env-gate-app",
+        repo=str(app.bare),
+        env={"NEXUS_TEST_VAR": "hello"},  # include overrides the wrong root value
+    )
+    result = update_app(inc, nexus_home, root_env={"NEXUS_TEST_VAR": "wrong"})
+
+    assert result is True
