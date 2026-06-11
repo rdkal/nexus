@@ -28,11 +28,12 @@ def build_env(nexus_home: Path, nexus_src: Path, config: NexusConfig) -> dict:
     env["NEXUS_HOME"] = str(nexus_home)
     env["NEXUS_SRC"] = str(nexus_src)
     env["PREFECT_API_URL"] = "http://localhost:4200/api"
+    env.update(config.env)                              # root env — visible to all apps
     for inc in config.includes:
         key = f"NEXUS_APP_{inc.name.upper().replace('-', '_')}_DIR"
         env[key] = str(nexus_home / "apps" / inc.name)
         env[f"NEXUS_BASE_PATH_{inc.name.upper().replace('-', '_')}"] = f"/{inc.name}"
-        env.update(inc.env)
+        env.update(inc.env)                             # per-include env overrides root
     return env
 
 

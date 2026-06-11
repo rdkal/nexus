@@ -15,9 +15,10 @@ Status legend: ✅ Done · ⚠️ Partial · ❌ Not done
 | Root config (project + includes) | ✅ | ✅ | ✅ |
 | IncludeConfig shorthand (`github.com/org/repo@ref`) | ✅ | ✅ | ✅ |
 | IncludeConfig full form (repo + poll_interval + env) | ✅ | ✅ | ✅ |
-| Schema-less URL → https:// prepended | ✅ | ✅ | ✅ |
+| Schema-less URL normalised, resolved at clone time | ✅ | ✅ | ✅ |
 | `@ref` suffix for branch or tag pinning | ✅ | ✅ | ✅ |
-| `env:` map injected into app processes | ✅ | ✅ | ✅ |
+| Root-level `env:` visible to all apps | ✅ | ✅ | ✅ |
+| Per-include `env:` overrides root | ✅ | ✅ | ✅ |
 | Multiple includes | ✅ | ✅ | ✅ |
 | FlowConfig shorthand (string entrypoint) | ✅ | ✅ | ✅ |
 | FlowConfig full form (entrypoint + deploy gates) | ✅ | ✅ | ✅ |
