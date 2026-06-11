@@ -144,7 +144,8 @@ The portal has four sections:
 
 **Links** — one-click access to companion UIs:
 - Prefect UI (port 4200) — workflow runs, deployments, schedules
-- Process Compose UI (port 9080) — live process list, logs, stop/start controls
+
+(Process Compose has no web UI — its HTTP port serves Swagger API docs only. Process status is read via the API and displayed directly in the nexus portal instead.)
 
 **Services** — health of nexus's own internal processes, read live from the process-compose API:
 

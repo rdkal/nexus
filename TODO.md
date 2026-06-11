@@ -39,7 +39,6 @@ Status legend: ✅ Done · ⚠️ Partial · ❌ Not done
 | **nexus-web portal (port 8080)** | ✅ | ✅ | ⚠️ |
 | Serves HTTP 200 | ✅ | ✅ | ✅ |
 | Links to Prefect UI at port 4200 | ✅ | ✅ | ✅ |
-| Link to Process Compose UI at port 9080 | ✅ | ❌ | ❌ |
 | Services section — live status from process-compose API | ✅ | ❌ | ❌ |
 | Apps section — name, repo, current SHA, clone exists | ✅ | ❌ | ❌ |
 | Config section — project, env keys, includes | ✅ | ❌ | ❌ |
