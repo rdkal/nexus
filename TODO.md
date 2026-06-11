@@ -36,9 +36,17 @@ Status legend: ✅ Done · ⚠️ Partial · ❌ Not done
 | App compose files collected from nexus.yaml | ✅ | ✅ | ✅ |
 | Per-app env vars injected (NEXUS_APP_*_DIR, NEXUS_BASE_PATH_*) | ✅ | ✅ | ✅ |
 | Per-include custom env vars injected | ✅ | ✅ | ✅ |
-| **nexus-web portal (port 8080)** | ✅ | ✅ | ✅ |
+| **nexus-web portal (port 8080)** | ✅ | ✅ | ⚠️ |
 | Serves HTTP 200 | ✅ | ✅ | ✅ |
 | Links to Prefect UI at port 4200 | ✅ | ✅ | ✅ |
+| Basic auth (NEXUS_USER / NEXUS_PASSWORD env vars) | ✅ | ✅ | ✅ |
+| Services section — live status from process-compose API | ✅ | ❌ | ❌ |
+| Start / stop / restart process via portal | ✅ | ❌ | ❌ |
+| Apps section — name, repo, current SHA, clone exists | ✅ | ❌ | ❌ |
+| Config section — project, env keys, includes | ✅ | ❌ | ❌ |
+| Buffered log viewer per process | ✅ | ❌ | ❌ |
+| Live log streaming (SSE) per process | ✅ | ❌ | ❌ |
+| Graceful error when config.yaml missing or invalid | ✅ | ❌ | ❌ |
 | **Prefect server + worker** | ✅ | ✅ | ❌ |
 | Server starts on port 4200 | ✅ | ✅ | ❌ (port never checked in tests) |
 | Worker connects to nexus-pool | ✅ | ✅ | ❌ |

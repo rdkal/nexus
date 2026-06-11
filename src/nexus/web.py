@@ -1,11 +1,31 @@
 import os
-from fastapi import FastAPI
+import secrets
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import uvicorn
 
 app = FastAPI(title="Nexus")
 
 PREFECT_UI_URL = os.environ.get("PREFECT_UI_URL", "http://localhost:4200")
+NEXUS_USER = os.environ.get("NEXUS_USER", "")
+NEXUS_PASSWORD = os.environ.get("NEXUS_PASSWORD", "")
+
+_security = HTTPBasic(auto_error=False)
+
+
+def _require_auth(credentials: HTTPBasicCredentials | None = Depends(_security)) -> None:
+    if not NEXUS_USER:
+        return  # auth disabled — neither var is set
+    if credentials is None or not (
+        secrets.compare_digest(credentials.username.encode(), NEXUS_USER.encode())
+        and secrets.compare_digest(credentials.password.encode(), NEXUS_PASSWORD.encode())
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            headers={"WWW-Authenticate": 'Basic realm="Nexus"'},
+        )
+
 
 _HTML = f"""<!DOCTYPE html>
 <html lang="en">
@@ -58,7 +78,7 @@ _HTML = f"""<!DOCTYPE html>
 </html>"""
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse, dependencies=[Depends(_require_auth)])
 def index():
     return _HTML
 

@@ -137,8 +137,56 @@ Apps must have a `nexus.yaml` — there is no bare `process-compose.yaml` fallba
 ## Components
 
 ### nexus-web (port 8080)
-FastAPI process serving a static HTML page that links to the Prefect UI.
+FastAPI process serving a dashboard that gives an at-a-glance view of the running nexus installation.
 No auth, no HTTPS — apps own their own security. Entry point: `src/nexus/web.py`.
+
+The portal has four sections:
+
+**Links** — one-click access to companion UIs:
+- Prefect UI (port 4200) — workflow runs, deployments, schedules
+
+(Process Compose has no web UI — its HTTP port serves Swagger API docs only. Process status is read via the API and displayed directly in the nexus portal instead.)
+
+**Services** — health of nexus's own internal processes, read live from the process-compose API:
+
+| Service | What it tells you |
+|---|---|
+| `prefect-server` | Is the workflow engine up? |
+| `prefect-worker` | Is there a worker to pick up runs? |
+| `nexus-poller` | Is git polling active? |
+| `nexus-web` | (self — always green if this page loads) |
+
+**Apps** — one row per included app from `config.yaml`:
+- App name and repo identifier
+- Currently checked-out git SHA (short)
+- Whether the active clone exists on disk
+
+**Config** — parsed `config.yaml` displayed in a readable form:
+- Project name
+- Root `env:` keys (values hidden — they may contain secrets)
+- Each include: name, repo, ref, poll interval, env keys
+
+If `config.yaml` is missing or unparseable the page shows a clear error instead of crashing.
+
+**Authentication** — optional HTTP Basic Auth controlled by two env vars:
+
+| Variable | Purpose |
+|---|---|
+| `NEXUS_USER` | Username |
+| `NEXUS_PASSWORD` | Password |
+
+If either is unset, auth is disabled (safe for local/trusted-network use). When both are set every request requires valid credentials — the browser's built-in login dialog appears automatically via the `WWW-Authenticate: Basic` header. Set these in the root `env:` block or in the system environment before nexus starts.
+
+**Portal → process-compose API** — start/stop/restart and log access go through a proxy layer in nexus-web (`/api/*` routes) so the browser only ever talks to port 8080 and CORS is not an issue:
+
+| Route | Forwards to |
+|---|---|
+| `GET /api/processes` | `GET :9080/processes` |
+| `POST /api/process/start/{name}` | `POST :9080/process/start/{name}` |
+| `PATCH /api/process/stop/{name}` | `PATCH :9080/process/stop/{name}` |
+| `POST /api/process/restart/{name}` | `POST :9080/process/restart/{name}` |
+| `GET /api/process/logs/{name}` | `GET :9080/process/logs/{name}/0/{limit}` |
+| `GET /api/process/logs/{name}/stream` | Server-Sent Events proxying `ws://:9080/process/logs/ws` |
 
 ### prefect-server (port 4200)
 A local Prefect 3 server. All flows from all apps are deployed here.
