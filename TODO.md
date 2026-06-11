@@ -40,13 +40,13 @@ Status legend: ✅ Done · ⚠️ Partial · ❌ Not done
 | Serves HTTP 200 | ✅ | ✅ | ✅ |
 | Links to Prefect UI at port 4200 | ✅ | ✅ | ✅ |
 | Basic auth (NEXUS_USER / NEXUS_PASSWORD env vars) | ✅ | ✅ | ✅ |
-| Services section — live status from process-compose API | ✅ | ❌ | ❌ |
-| Start / stop / restart process via portal | ✅ | ❌ | ❌ |
-| Apps section — name, repo, current SHA, clone exists | ✅ | ❌ | ❌ |
-| Config section — project, env keys, includes | ✅ | ❌ | ❌ |
-| Buffered log viewer per process | ✅ | ❌ | ❌ |
-| Live log streaming (SSE) per process | ✅ | ❌ | ❌ |
-| Graceful error when config.yaml missing or invalid | ✅ | ❌ | ❌ |
+| Services section — live status from process-compose API | ✅ | ✅ | ✅ |
+| Start / stop / restart process via portal | ✅ | ✅ | ✅ |
+| Apps section — name, repo, current SHA, clone exists | ✅ | ✅ | ✅ |
+| Config section — project, env keys, includes | ✅ | ✅ | ✅ |
+| Buffered log viewer per process | ✅ | ✅ | ⚠️ (proxies PC API; format depends on PC version) |
+| Live log streaming (SSE) per process | ✅ | ✅ | ⚠️ (polling-based SSE; no unit test for stream) |
+| Graceful error when config.yaml missing or invalid | ✅ | ✅ | ✅ |
 | **Prefect server + worker** | ✅ | ✅ | ❌ |
 | Server starts on port 4200 | ✅ | ✅ | ❌ (port never checked in tests) |
 | Worker connects to nexus-pool | ✅ | ✅ | ❌ |

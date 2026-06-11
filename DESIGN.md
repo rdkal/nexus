@@ -138,7 +138,7 @@ Apps must have a `nexus.yaml` — there is no bare `process-compose.yaml` fallba
 
 ### nexus-web (port 8080)
 FastAPI process serving a dashboard that gives an at-a-glance view of the running nexus installation.
-No auth, no HTTPS — apps own their own security. Entry point: `src/nexus/web.py`.
+Entry point: `src/nexus/web.py`.
 
 The portal has four sections:
 
@@ -186,7 +186,7 @@ If either is unset, auth is disabled (safe for local/trusted-network use). When 
 | `PATCH /api/process/stop/{name}` | `PATCH :9080/process/stop/{name}` |
 | `POST /api/process/restart/{name}` | `POST :9080/process/restart/{name}` |
 | `GET /api/process/logs/{name}` | `GET :9080/process/logs/{name}/0/{limit}` |
-| `GET /api/process/logs/{name}/stream` | Server-Sent Events proxying `ws://:9080/process/logs/ws` |
+| `GET /api/process/logs/{name}/stream` | Server-Sent Events; polls `GET :9080/process/logs/{name}/0/500` and streams new lines |
 
 ### prefect-server (port 4200)
 A local Prefect 3 server. All flows from all apps are deployed here.
@@ -240,11 +240,11 @@ processes:
 |---|---|
 | `NEXUS_HOME` | `~/.nexus` |
 | `NEXUS_SRC` | path to nexus source |
-| `NEXUS_PORT` | nexus-web listen port (default `8080`) |
 | `PREFECT_API_URL` | `http://localhost:4200/api` |
-| `PREFECT_UI_URL` | Prefect UI origin shown on the portal (default `http://localhost:4200`) |
 | `NEXUS_APP_<NAME>_DIR` | absolute path to that app's cloned repo |
 | `NEXUS_BASE_PATH_<NAME>` | `/<name>` — app's base URL path |
+
+`NEXUS_PORT` and `PREFECT_UI_URL` are read by nexus-web from the environment (with defaults `8080` and `http://localhost:4200` respectively); they are not injected by start.py but can be set in the system environment or the root `env:` block.
 
 ---
 
