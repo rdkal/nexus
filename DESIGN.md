@@ -137,8 +137,35 @@ Apps must have a `nexus.yaml` — there is no bare `process-compose.yaml` fallba
 ## Components
 
 ### nexus-web (port 8080)
-FastAPI process serving a static HTML page that links to the Prefect UI.
+FastAPI process serving a dashboard that gives an at-a-glance view of the running nexus installation.
 No auth, no HTTPS — apps own their own security. Entry point: `src/nexus/web.py`.
+
+The portal has four sections:
+
+**Links** — one-click access to companion UIs:
+- Prefect UI (port 4200) — workflow runs, deployments, schedules
+- Process Compose UI (port 9080) — live process list, logs, stop/start controls
+
+**Services** — health of nexus's own internal processes, read live from the process-compose API:
+
+| Service | What it tells you |
+|---|---|
+| `prefect-server` | Is the workflow engine up? |
+| `prefect-worker` | Is there a worker to pick up runs? |
+| `nexus-poller` | Is git polling active? |
+| `nexus-web` | (self — always green if this page loads) |
+
+**Apps** — one row per included app from `config.yaml`:
+- App name and repo identifier
+- Currently checked-out git SHA (short)
+- Whether the active clone exists on disk
+
+**Config** — parsed `config.yaml` displayed in a readable form:
+- Project name
+- Root `env:` keys (values hidden — they may contain secrets)
+- Each include: name, repo, ref, poll interval, env keys
+
+If `config.yaml` is missing or unparseable the page shows a clear error instead of crashing.
 
 ### prefect-server (port 4200)
 A local Prefect 3 server. All flows from all apps are deployed here.
