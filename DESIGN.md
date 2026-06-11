@@ -168,6 +168,26 @@ The portal has four sections:
 
 If `config.yaml` is missing or unparseable the page shows a clear error instead of crashing.
 
+**Authentication** — optional HTTP Basic Auth controlled by two env vars:
+
+| Variable | Purpose |
+|---|---|
+| `NEXUS_USER` | Username |
+| `NEXUS_PASSWORD` | Password |
+
+If either is unset, auth is disabled (safe for local/trusted-network use). When both are set every request requires valid credentials — the browser's built-in login dialog appears automatically via the `WWW-Authenticate: Basic` header. Set these in the root `env:` block or in the system environment before nexus starts.
+
+**Portal → process-compose API** — start/stop/restart and log access go through a proxy layer in nexus-web (`/api/*` routes) so the browser only ever talks to port 8080 and CORS is not an issue:
+
+| Route | Forwards to |
+|---|---|
+| `GET /api/processes` | `GET :9080/processes` |
+| `POST /api/process/start/{name}` | `POST :9080/process/start/{name}` |
+| `PATCH /api/process/stop/{name}` | `PATCH :9080/process/stop/{name}` |
+| `POST /api/process/restart/{name}` | `POST :9080/process/restart/{name}` |
+| `GET /api/process/logs/{name}` | `GET :9080/process/logs/{name}/0/{limit}` |
+| `GET /api/process/logs/{name}/stream` | Server-Sent Events proxying `ws://:9080/process/logs/ws` |
+
 ### prefect-server (port 4200)
 A local Prefect 3 server. All flows from all apps are deployed here.
 
