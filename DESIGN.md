@@ -166,7 +166,7 @@ includes:
   - url: https://github.com/myorg/api
     ref: "@main"
     bind:
-      database: postgres.postgres   # short-name.service resolves unambiguously here
+      database: postgres/services/postgres   # short-name/services/<name>, unambiguous here
 ```
 
 ### Full example (repo with services)
@@ -231,7 +231,7 @@ No hardcoded names, no knowledge of who includes it. The include site names it.
 |---|---|---|
 | `url` | yes | Git-cloneable URL. Scheme-stripped, `.git`-removed form is the deployment's identity |
 | `ref` | no | Ref to track, prefixed with `@`. Defaults to `@main`. See ref syntax below |
-| `bind` | no | Map of `alias: <address>` resolving dependency aliases declared in that repo's services. Address is `<short-name>.<service>` or the full `<url-path>.<service>` form |
+| `bind` | no | Map of `alias: <address>` resolving dependency aliases declared in that repo's services. Address is `<short-name>/services/<service>` or the full `<url-path>/services/<service>` form |
 
 **Ref syntax:**
 
@@ -251,23 +251,50 @@ No hardcoded names, no knowledge of who includes it. The include site names it.
 
 | Field | Required | Description |
 |---|---|---|
-| `name` | yes | Unique within this repo. Addressed externally as `<slug>.<name>` |
+| `name` | yes | Unique within this deployment. Addressed externally as `<url-path>/services/<name>` |
 | `run` | yes | Shell command. Spawned with `sh -c` from the worktree root |
 | `depends_on` | no | List of service names this service needs before it can start. See Dependency Resolution |
 
 ---
 
+## Resource Naming Rules
+
+Resource names (service names, volume names, and future flow names) must not be any
+of the reserved type namespace segments: `services`, `volumes`, `flows`.
+
+This guarantees that any path under a deployment URL is unambiguously parseable:
+
+```
+github.com/rdkal/my-project/services          → the services namespace
+github.com/rdkal/my-project/services/api      → service named "api"
+github.com/rdkal/my-project/volumes/data      → volume named "data"
+github.com/rdkal/my-project/services/volumes  → INVALID — "volumes" is reserved
+github.com/rdkal/my-project/volumes/flows     → INVALID — "flows" is reserved
+```
+
+Nexus validates resource names at startup and rejects any `nexus.yaml` that uses a
+reserved name. Adding a new resource type in the future simply adds a new reserved word.
+
+---
+
 ## Dependency Resolution
+
+Full service addresses follow the resource path convention:
+
+```
+github.com/nexus-community/postgres/services/postgres   full form, always unambiguous
+postgres/services/postgres                               short form (last URL segment)
+```
 
 `depends_on` entries are resolved in this order:
 
-1. **Sibling service** — bare name with no `.` matches a service in the same `nexus.yaml` → resolved directly
-2. **Bound alias** — name matches a key in the `bind:` map provided by the parent that includes this repo → resolves to the bound address
-3. **Short-name address** — `<short-name>.<service>` where `short-name` is the last URL segment of any deployment in the tree → resolved if unambiguous
-4. **Full address** — `<url-path>.<service>` (e.g. `github.com/nexus-community/postgres.postgres`) → always unambiguous
+1. **Sibling service** — bare name with no `/` matches a service in the same `nexus.yaml` → resolved directly
+2. **Bound alias** — name matches a key in the `bind:` map provided by the parent that includes this repo → resolves to the bound full address
+3. **Short-name address** — `<repo-short-name>/services/<service>` where the short name is the last URL segment of any deployment in the tree → resolved if unambiguous
+4. **Full address** — `<url-path>/services/<service>` → always unambiguous
 
-If resolution is ambiguous (two deployments with the same short name), nexus fails at
-startup with a clear error and requires the full URL-path form.
+If resolution is ambiguous (two deployments share the same last URL segment), nexus
+fails at startup with a clear error and requires the full URL-path form.
 
 If a name cannot be resolved at all, nexus fails at startup with a clear error identifying
 the unresolved dependency and the deployment that declared it.
