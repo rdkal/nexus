@@ -82,16 +82,16 @@ https://gitlab.com/myorg/api      →  gitlab.com/myorg/api
 
 No `name` or `project` field anywhere. The identity comes from where the code lives.
 
-**Short name**: the last path segment of the URL (`api` from `github.com/myorg/api`).
-Used when addressing services in contexts where the short name is unambiguous.
-
-Services are addressed as `<short-name>.<service-name>` or, where disambiguation is
-needed, `<full-url-path>.<service-name>`:
+Services are addressed either by bare name (within the same deployment, sibling resolution)
+or by fully qualified resource path:
 
 ```
-github.com/nexus-community/postgres.postgres   full form
-postgres.postgres                              short form (unambiguous in most trees)
+github.com/nexus-community/postgres/services/postgres   fully qualified
 ```
+
+Cross-deployment references always use the fully qualified form. The `bind:` mechanism
+in `includes` lets you map a local alias to a fully qualified address, so deployments
+themselves stay portable and name-agnostic.
 
 ---
 
@@ -166,7 +166,7 @@ includes:
   - url: https://github.com/myorg/api
     ref: "@main"
     bind:
-      database: postgres/services/postgres   # short-name/services/<name>, unambiguous here
+      database: github.com/nexus-community/postgres/services/postgres
 ```
 
 ### Full example (repo with services)
@@ -231,7 +231,7 @@ No hardcoded names, no knowledge of who includes it. The include site names it.
 |---|---|---|
 | `url` | yes | Git-cloneable URL. Scheme-stripped, `.git`-removed form is the deployment's identity |
 | `ref` | no | Ref to track, prefixed with `@`. Defaults to `@main`. See ref syntax below |
-| `bind` | no | Map of `alias: <address>` resolving dependency aliases declared in that repo's services. Address is `<short-name>/services/<service>` or the full `<url-path>/services/<service>` form |
+| `bind` | no | Map of `alias: <fully-qualified-address>` resolving dependency aliases declared in that repo's services. Address form: `<url-path>/services/<service-name>` |
 
 **Ref syntax:**
 
@@ -279,24 +279,17 @@ reserved name. Adding a new resource type in the future simply adds a new reserv
 
 ## Dependency Resolution
 
-Full service addresses follow the resource path convention:
-
-```
-github.com/nexus-community/postgres/services/postgres   full form, always unambiguous
-postgres/services/postgres                               short form (last URL segment)
-```
-
 `depends_on` entries are resolved in this order:
 
-1. **Sibling service** — bare name with no `/` matches a service in the same `nexus.yaml` → resolved directly
-2. **Bound alias** — name matches a key in the `bind:` map provided by the parent that includes this repo → resolves to the bound full address
-3. **Short-name address** — `<repo-short-name>/services/<service>` where the short name is the last URL segment of any deployment in the tree → resolved if unambiguous
-4. **Full address** — `<url-path>/services/<service>` → always unambiguous
+1. **Bare name** — no `/` in the name → sibling service in the same `nexus.yaml`, resolved directly
+2. **Bound alias** — name matches a key in the `bind:` map provided by the parent that includes this repo → resolves to the bound fully qualified address
+3. **Fully qualified address** — `<url-path>/services/<service-name>` → always unambiguous
 
-If resolution is ambiguous (two deployments share the same last URL segment), nexus
-fails at startup with a clear error and requires the full URL-path form.
+There is no intermediate short form for cross-deployment references. If you want to
+reference a service in another deployment, either use its fully qualified address or
+declare a `bind:` alias at the include site and use the alias.
 
-If a name cannot be resolved at all, nexus fails at startup with a clear error identifying
+If a name cannot be resolved, nexus fails at startup with a clear error identifying
 the unresolved dependency and the deployment that declared it.
 
 Circular dependencies cause a startup error.
