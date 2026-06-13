@@ -10,15 +10,17 @@ mechanism is git; the only configuration format is YAML.
 A single `curl` invocation installs the daemon. From that point, everything —
 including updates to nexus itself — is driven by commits.
 
+Nexus runs entirely in user space. No root required.
+
 ---
 
 ## Core Concepts
 
 | Concept | Description |
 |---|---|
-| **Repo** | A git repository with a `nexus.yaml` at its root |
-| **Deployment** | The unit nexus manages: a build command, named services, and volumes, all versioned together |
-| **Service** | A named, long-running process within a deployment. Nexus starts it and supervises it |
+| **Deployment** | The unit nexus manages: a build command, named services, and volumes, all versioned together at a git ref |
+| **Include** | A reference to another repo (and its `nexus.yaml`) pulled into the current deployment tree, given a local name at the include site |
+| **Service** | A named long-running process within a deployment. Nexus starts it, supervises it, and stops it |
 | **Worktree** | An isolated checkout of a repo at a specific commit SHA. One active worktree per deployment |
 | **Volume** | A directory that lives outside worktrees and persists across deployments |
 
@@ -33,50 +35,62 @@ curl https://github.com/rdkal/nexus/raw/main/install.sh | sh -s -- \
 
 The install script:
 
-1. Installs the `nexus` binary to `/usr/local/bin/nexus`
-2. Creates `/var/nexus/` for runtime state
-3. Registers and starts a system service (`systemd` on Linux, `launchd` on macOS)
-4. Clones the given `--source` repo as the **root repo**
+1. Installs the `nexus` binary to `~/.local/bin/nexus`
+2. Creates `~/.nexus/` (or `$NEXUS_HOME`) for all runtime state
+3. Registers and starts a **user-mode** service:
+   - Linux: `systemctl --user enable/start nexus`
+   - macOS: `launchctl load ~/Library/LaunchAgents/nexus.plist`
+4. Clones the given `--source` repo as the root of the deployment tree
 
-The root repo's `nexus.yaml` is the entry point for the entire system. Because nexus
-manages itself the same way it manages any other repo, updating nexus is just a commit.
+No root or sudo required.
+
+---
+
+## NEXUS_HOME
+
+All nexus runtime state lives under a single configurable directory.
+
+| Precedence | Source |
+|---|---|
+| 1 | `--home <path>` flag on the nexus binary |
+| 2 | `NEXUS_HOME` environment variable |
+| 3 | `~/.nexus` (default) |
+
+Using `NEXUS_HOME` lets you run multiple isolated nexus instances on the same machine,
+or relocate state to a larger disk.
 
 ---
 
 ## nexus.yaml Specification
 
-Every repo that nexus manages has a `nexus.yaml` at its root. The format is the same
-whether it is the root repo or a repo pulled in transitively.
+Every repo nexus manages has a `nexus.yaml` at its root. There is no `name` field —
+deployments get their name from the parent that includes them. The root deployment
+has no name (it is the root).
 
 ```yaml
 # nexus.yaml
 
-name: api-service
-
-# Optional: pull in more repos. Each must have its own nexus.yaml.
-# This is how you compose a whole system from independent repos.
-repos:
-  - url: https://github.com/myorg/worker-service
+# Pull in other repos. Each becomes an independently managed deployment,
+# identified by the name given here.
+includes:
+  - name: api
+    url: https://github.com/myorg/api-service
     ref: main
-  - url: https://github.com/myorg/shared-infra
-    ref: v2.1.0
+  - name: postgres
+    url: https://github.com/nexus-community/postgres
+    ref: v15
 
-# The deployment defined by this repo.
-# All fields below are optional — a nexus.yaml that only lists repos is valid.
-
-# build runs once inside the new worktree before services are started.
-# A non-zero exit aborts the deployment; current services keep running.
+# Optional build command. Runs once inside the new worktree before services start.
+# Non-zero exit aborts the deployment; current services keep running.
 build: pip install -e . && alembic upgrade head
 
-# Persistent directories that survive across deployments.
-# Accessible inside build and service commands as $NEXUS_VOLUME_<NAME> (uppercased).
+# Persistent directories. Survive across deployments.
+# Accessible as $NEXUS_VOLUME_<NAME> (uppercased) in build and service commands.
 volumes:
   - name: data
-    path: /var/nexus/volumes/api-service-data
-  - name: config
-    path: /var/nexus/volumes/api-service-config
+    path: $NEXUS_HOME/volumes/api-data
 
-# Named long-running processes. Nexus starts them, supervises them, and stops them.
+# Named long-running processes. Nexus starts, supervises, and stops them.
 services:
   - name: api
     run: uvicorn app:main --host 0.0.0.0 --port 8080
@@ -84,22 +98,16 @@ services:
     run: celery -A app.tasks worker --concurrency 4
 ```
 
+A `nexus.yaml` that only has `includes` and no `build`/`services` is valid —
+useful for a root config that is purely an aggregator.
+
 ### Field Reference
 
-#### Top-level
-
-| Field | Type | Description |
-|---|---|---|
-| `name` | string | Human label, used in the UI and logs |
-| `repos` | list | Other repos to pull in and manage. Each needs its own `nexus.yaml` |
-| `build` | string | Shell command run in the new worktree before startup. Optional |
-| `volumes` | list | Persistent directories. Created on first use if absent |
-| `services` | list | Long-running processes nexus supervises |
-
-#### `repos[]`
+#### `includes[]`
 
 | Field | Required | Description |
 |---|---|---|
+| `name` | yes | Local identifier for this deployment. Used in logs, UI, and path namespacing |
 | `url` | yes | Git-cloneable URL |
 | `ref` | no | Branch, tag, or SHA. Defaults to `main` |
 
@@ -107,201 +115,256 @@ services:
 
 | Field | Required | Description |
 |---|---|---|
-| `name` | yes | Identifier. Exposed in the environment as `$NEXUS_VOLUME_<NAME>` |
-| `path` | yes | Absolute path on host. Created if it does not exist |
+| `name` | yes | Identifier. Exposed as `$NEXUS_VOLUME_<NAME>` in build and service commands |
+| `path` | yes | Absolute path or path containing `$NEXUS_HOME`. Created on first use if absent |
 
 #### `services[]`
 
 | Field | Required | Description |
 |---|---|---|
-| `name` | yes | Unique within the deployment. Used in logs and the UI |
+| `name` | yes | Unique within this deployment. Used in logs and the UI |
 | `run` | yes | Shell command. Runs with `sh -c` from the worktree root |
 
 ---
 
-## Environment Available to Build and Services
-
-Nexus injects these variables into every `build` command and every `service` process:
+## Environment Injected into Build and Services
 
 ```sh
-NEXUS_REPO=<name>
+NEXUS_HOME=<path>              # e.g. /home/user/.nexus
 NEXUS_SHA=<full-commit-sha>
 NEXUS_REF=<branch-or-tag>
 NEXUS_WORKTREE=<absolute-path-to-this-worktree>
-NEXUS_VOLUME_<NAME>=<path>     # one per declared volume
+NEXUS_VOLUME_<NAME>=<path>     # one per declared volume, name uppercased
 ```
 
 ---
 
 ## Deployment Lifecycle
 
-This is the exact sequence nexus follows when a new commit is detected.
+### New commit detected
 
 ```
 1. DETECT
-   ├── Poll `git fetch origin <ref>` on an interval (default: 30s)
-   └── New SHA differs from last-known → proceed
+   ├── Poll `git fetch origin <ref>` every 30s
+   └── New SHA → enqueue (see Queuing below)
 
 2. CHECKOUT
-   └── git worktree add /var/nexus/repos/<slug>/worktrees/<new-sha> <new-sha>
+   └── git worktree add $NEXUS_HOME/worktrees/<slug>/<sha> <sha>
 
 3. BUILD  (runs inside the new worktree)
-   ├── Execute the `build` command with sh -c
-   ├── Capture stdout/stderr to a log file
-   ├── Exit 0 → proceed to SWAP
-   └── Non-zero exit → remove the failed worktree, keep current deployment running
+   ├── sh -c "<build command>"
+   ├── Capture stdout/stderr to $NEXUS_HOME/logs/<slug>/<sha>-build.log
+   ├── Exit 0 → proceed
+   └── Non-zero → remove worktree, mark SHA as failed, keep current running
 
 4. SWAP
    ├── 4a. SHUTDOWN current services
-   │       SIGTERM to every supervised service process
-   │       Wait up to 30s for graceful exit
-   │       SIGKILL anything still running
+   │       SIGTERM to every supervised service
+   │       Wait (daemon-wide grace period, default 30s)
+   │       SIGKILL anything still alive
    │
    └── 4b. STARTUP new services
-           For each service in the new deployment:
-             spawn `run` command from the new worktree
-             register PID with nexus supervisor
-           On any service crashing immediately → ROLLBACK (see below)
+           Spawn each service's `run` command from the new worktree
+           Register PIDs with the supervisor
 
-5. PROMOTE
-   ├── Record new SHA as active in nexus.db
-   └── Old worktree is now eligible for removal
+5. VERIFY  (5-second window)
+   ├── If any service exits within 5s → ROLLBACK
+   └── All alive → proceed
 
-6. CLEANUP
-   └── git worktree remove <old-sha>  (best-effort, retried on next cycle)
+6. PROMOTE
+   └── Record new SHA as active in nexus.db
+
+7. CLEANUP
+   └── git worktree remove <old-sha>  (old worktree deleted)
 ```
 
 ### Rollback
 
-If one or more services crash within 5 seconds of startup:
+If VERIFY fails:
 
-1. Kill all services from the new deployment
-2. Re-start each service from the **previous** worktree (which is still present)
-3. Mark the new SHA as `failed` in nexus.db
-4. Keep the failed worktree on disk until next successful deployment (for log inspection)
+1. SIGTERM + SIGKILL all services from the failed deployment
+2. Restart each service from the **previous** worktree (retained until now)
+3. Mark new SHA as `failed` in nexus.db
+4. Failed worktree kept on disk until next successful deployment (for log inspection)
+5. Alert shown in the UI
+
+### Queuing
+
+If a new commit arrives while a build is already in progress:
+
+- The incoming SHA is enqueued (queue depth: 1 — only the latest pending SHA is kept)
+- When the current build finishes (success or failure), the queued SHA is processed next
+- If another commit arrives while one is already queued, the queued SHA is replaced by the newer one
+
+This means nexus always converges to the latest commit without processing every intermediate SHA.
+
+---
+
+## Includes and Reusable Deployments
+
+The `includes` mechanism is designed to enable third-party, reusable deployments.
+For example, a community-maintained Postgres deployment can be included without
+any local configuration beyond the include line:
+
+```yaml
+# my-system nexus.yaml
+includes:
+  - name: db
+    url: https://github.com/nexus-community/postgres
+    ref: v15
+  - name: api
+    url: https://github.com/myorg/api
+    ref: main
+```
+
+The `postgres` repo publishes a `nexus.yaml` that defines the service and volumes.
+The `name: db` at the include site namespaces everything — worktrees, logs — so
+including the same repo twice with different names works cleanly.
+
+Volume path namespacing for included deployments: volumes defined with `$NEXUS_HOME`
+in their path naturally pick up the deploying user's home. Absolute paths in
+third-party `nexus.yaml` files should be avoided in favour of `$NEXUS_HOME`-relative
+paths to stay portable.
 
 ---
 
 ## Process Supervision
 
-Nexus is the process supervisor for all services. It does not rely on systemd units
-or any external supervisor per service.
+Nexus is the supervisor for all service processes. It does not use systemd units
+per service.
 
-- Each service process is spawned as a direct child of the nexus daemon
-- On unexpected exit, nexus restarts with exponential backoff: 1s, 2s, 4s … cap 60s
-- A service that crashes more than 5 times within 60 seconds is marked `degraded`
-  and is not restarted automatically; the UI shows an alert
-- On a planned SHUTDOWN (new deployment arriving), nexus sends SIGTERM, then after
-  a grace period (default 30s, not yet configurable in v1) sends SIGKILL
-
-Services bind their own ports. Nexus does not proxy or manage port allocation;
-it only tracks PID, uptime, and restart count.
+- Each service is a direct child process of the nexus daemon
+- On unexpected exit: restart with exponential backoff — 1s, 2s, 4s … cap 60s
+- Crashes more than 5 times in 60s → service marked `degraded`, no further restarts, UI alert shown
+- On planned SHUTDOWN: SIGTERM, then SIGKILL after the daemon-wide grace period (default 30s)
 
 ---
 
-## Directory Layout (runtime)
+## Nexus Self-Update
+
+Nexus uses a **thin launcher** pattern to avoid a circular update problem.
+
+### Components
 
 ```
-/var/nexus/
+~/.local/bin/nexus-launcher   ← installed once by the install script, never updated by nexus
+~/.nexus/bin/nexus            ← the actual nexus binary, updated by deployments
+```
+
+The OS service unit (`systemd --user` / `launchd`) points to `nexus-launcher`.
+The launcher simply exec's `~/.nexus/bin/nexus`. It never changes.
+
+### Self-update flow
+
+The root `nexus.yaml` (or a dedicated nexus-update repo) includes:
+
+```yaml
+build: ./scripts/install-binary.sh   # compiles or downloads new nexus to ~/.nexus/bin/nexus
+services:
+  - name: nexus
+    run: nexus daemon --home $NEXUS_HOME
+```
+
+When a new nexus commit lands:
+
+1. The new binary is built/downloaded into `~/.nexus/bin/nexus` during the BUILD step
+   (the old binary is still running from the previous worktree's path — it is unaffected)
+2. SHUTDOWN: the current nexus service process receives SIGTERM
+3. Nexus writes all state to disk, closes file handles, and exits cleanly
+4. STARTUP: `nexus daemon` is spawned — the launcher picks up the new binary from `~/.nexus/bin/nexus`
+5. The new nexus process reads `nexus.db`, resumes supervision of all other services
+
+The key invariant: nexus state is entirely in `nexus.db` and the filesystem. The
+new process can reconstruct full state on startup with no handshake with the old one.
+
+---
+
+## Directory Layout
+
+```
+$NEXUS_HOME/                          default: ~/.nexus
+  bin/
+    nexus                             ← current nexus binary (updated by deployments)
   repos/
-    <repo-slug>/
-      .git/                    ← bare clone
+    <slug>/
+      .git/                           ← bare clone
       worktrees/
-        <sha>/                 ← one checkout per deployment attempt
+        <sha>/                        ← one checkout per active/pending deployment
   volumes/
-    <volume-name>/             ← persistent, survives deployments
-  nexus.db                     ← sqlite: deployments, service state, logs
+    <name>/                           ← persistent across deployments
+  nexus.db                            ← sqlite: deployments, service state
   logs/
-    <repo-slug>/
+    <slug>/
       <sha>-build.log
       <sha>-<service-name>.log
 ```
 
----
-
-## Composable / Recursive Systems
-
-The `repos` field makes nexus recursive. The root repo defines the system boundary;
-each referenced repo is pulled in and managed independently. Those repos can
-themselves list more repos.
-
-```
-root nexus.yaml
-  └── repos:
-        ├── api-service/nexus.yaml
-        │     └── (build + services, no child repos)
-        ├── worker/nexus.yaml
-        │     └── repos:
-        │           └── shared-lib/nexus.yaml
-        └── infra/nexus.yaml
-              └── (volumes only, no services)
-```
-
-Each node watches its own `ref`, manages its own worktrees, and deploys
-independently. There is no cross-repo ordering or dependency in v1.
+Slug format: for the root deployment, the slug is `root`. For includes, it is the
+dot-joined path of names from the root, e.g. `api`, `db`, `api.shared-lib`.
 
 ---
 
 ## Web UI
 
 Nexus serves a minimal HTTP UI on a configurable port (default `7777`).
-No TLS, no authentication — intended for private network use.
+HTTP only, no authentication — intended for private network use.
 
 ### Pages
 
 | Page | Content |
 |---|---|
-| `/` | All repos, their current SHA, service health at a glance |
-| `/repos/<slug>` | Deployment history, build log per SHA, service status |
-| `/repos/<slug>/logs/<sha>/<service>` | Live-tailed service log |
+| `/` | All deployments, current SHA, service health summary |
+| `/deployments/<slug>` | Deployment history, build log per SHA, service status |
+| `/deployments/<slug>/logs/<sha>/<service>` | Tailed service log |
 | `/volumes` | Declared volumes and disk usage |
 
 ### API
 
 ```
-GET  /api/repos
-GET  /api/repos/<slug>
-GET  /api/repos/<slug>/deployments
-POST /api/repos/<slug>/redeploy     ← re-run current SHA (e.g. after config change)
+GET  /api/deployments
+GET  /api/deployments/<slug>
+GET  /api/deployments/<slug>/history
+POST /api/deployments/<slug>/redeploy    ← re-run current SHA (e.g. after volume change)
 GET  /api/services
 POST /api/services/<id>/restart
 ```
 
 ---
 
-## Security Posture (v1)
+## v1 Scope
 
-- HTTP only, no authentication
-- Intended for private networks / behind a firewall
-- All processes run as the nexus daemon user (no privilege escalation)
+**In scope:**
+- Install script (`curl … | sh`)
+- `nexus.yaml` with `includes`, `build`, `volumes`, `services`
+- Git polling, worktree-based deployments
+- Build → SIGTERM → start lifecycle with rollback
+- Commit queuing (latest-wins, depth 1)
+- Process supervision with restart backoff
+- Daemon-wide shutdown grace period (30s default)
+- Self-update via thin launcher pattern
+- `NEXUS_HOME` configuration
+- Minimal web UI (read-only + manual redeploy)
+- REST API
 
----
-
-## What Is Explicitly Out of Scope for v1
-
-- **Flows / pipelines** — deferred. The deployment lifecycle (build + signal + start)
-  covers the immediate need. Flows are the planned v2 addition.
-- TLS / authentication on the web UI
-- Inbound webhooks (git push events) — polling only for now
-- Secret management — secrets must be provided via volumes or host environment
-- Cross-repo dependency ordering
-- Multi-machine / distributed execution
+**Explicitly deferred:**
+- Flows / pipelines (v2)
+- TLS / authentication
+- Inbound webhooks (polling only)
+- Secret management
+- Cross-deployment dependency ordering
+- Multi-machine execution
 - Windows support
 
 ---
 
 ## Open Questions
 
-1. **Concurrent commits**: if two commits arrive during one build, does nexus queue
-   them or let the latest SHA supersede the in-flight build?
-   Proposal: drop in-flight build, start fresh with the newest SHA.
+1. **Grace period configuration**: daemon-wide 30s default for v1. Should this be
+   overridable per service in v2?
 
-2. **Service port declarations**: should `services` have an optional `ports` field
-   so the UI can surface clickable URLs?
+2. **Volume path convention**: should third-party `nexus.yaml` files be expected to
+   use `$NEXUS_HOME/volumes/<name>` by convention, or should nexus inject a
+   per-include volume root automatically?
 
-3. **Graceful shutdown timeout**: should this be configurable per service in v1, or
-   is a single daemon-level default (30s) enough to start?
-
-4. **Nexus self-update**: the root repo can define services that are nexus itself.
-   The daemon receiving SIGTERM mid-swap needs care. This warrants a dedicated
-   self-upgrade path.
+3. **Root deployment identity**: the root repo itself is a deployment. Should it have
+   a reserved slug (`root`) or derive its slug from the git remote URL?
