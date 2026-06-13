@@ -67,7 +67,39 @@ or relocate state to a larger disk.
 
 ---
 
+## Deployment Identity
+
+A deployment's identity is the **URL path to the directory containing its `nexus.yaml`**,
+with the scheme stripped and `.git` suffix removed. This mirrors how Go resolved packages
+before `go.mod`: the import path was the URL, the local path mirrored the URL under
+`$GOPATH/src/`.
+
+```
+https://github.com/myorg/api      →  github.com/myorg/api
+git@github.com:myorg/api.git      →  github.com/myorg/api  (normalised)
+https://gitlab.com/myorg/api      →  gitlab.com/myorg/api
+```
+
+No `name` or `project` field anywhere. The identity comes from where the code lives.
+
+**Short name**: the last path segment of the URL (`api` from `github.com/myorg/api`).
+Used when addressing services in contexts where the short name is unambiguous.
+
+Services are addressed as `<short-name>.<service-name>` or, where disambiguation is
+needed, `<full-url-path>.<service-name>`:
+
+```
+github.com/nexus-community/postgres.postgres   full form
+postgres.postgres                              short form (unambiguous in most trees)
+```
+
+---
+
 ## Directory Layout
+
+The repos and volumes directories mirror the URL structure, the same way `$GOPATH/src`
+mirrored import paths. Nesting depth in the include tree has no effect on the directory
+structure — each deployment lives at its URL path regardless of who includes it.
 
 ```
 $NEXUS_HOME/                               default: ~/.nexus
@@ -76,85 +108,75 @@ $NEXUS_HOME/                               default: ~/.nexus
 │   └── nexus                              nexus daemon binary (updated by deployments)
 │
 ├── repos/
-│   ├── root/
-│   │   ├── .git/                          bare clone of root repo
-│   │   └── worktrees/
-│   │       └── <sha>/                     checked-out worktree for each deployment attempt
-│   │
-│   ├── <include-name>/                    top-level include, e.g. "api"
-│   │   ├── .git/
-│   │   └── worktrees/
-│   │       └── <sha>/
-│   │
-│   └── <include-name>.<child-name>/       nested include, dot-joined slug, e.g. "api.shared-lib"
-│       ├── .git/
-│       └── worktrees/
-│           └── <sha>/
+│   └── github.com/
+│       ├── myorg/
+│       │   ├── my-system/                 root deployment (pointed at by install --source)
+│       │   │   ├── .git/                  bare clone
+│       │   │   └── worktrees/
+│       │   │       └── <sha>/             one checkout per deployment attempt
+│       │   └── api/
+│       │       ├── .git/
+│       │       └── worktrees/
+│       │           └── <sha>/
+│       └── nexus-community/
+│           └── postgres/
+│               ├── .git/
+│               └── worktrees/
+│                   └── <sha>/
 │
 ├── volumes/
-│   ├── root/
-│   │   └── <volume-name>/                 volumes declared in root nexus.yaml
-│   └── <slug>/
-│       └── <volume-name>/                 volumes declared in that include's nexus.yaml
-│                                          auto-namespaced by slug so the same repo can be
-│                                          included twice under different names without conflict
+│   └── github.com/
+│       ├── myorg/
+│       │   └── api/
+│       │       └── uploads/               volume "uploads" declared in api's nexus.yaml
+│       └── nexus-community/
+│           └── postgres/
+│               └── data/                  volume "data" declared in postgres's nexus.yaml
 │
 ├── nexus.db                               sqlite: repos, deployments, services, run history
 │
 └── logs/
-    └── <slug>/
-        ├── <sha>-build.log
-        └── <sha>-<service-name>.log
+    └── github.com/
+        └── myorg/
+            └── api/
+                ├── <sha>-build.log
+                └── <sha>-<service-name>.log
 ```
 
-**Slug rules:**
-- If `project: myapp` is set in the root nexus.yaml, the root slug is `myapp`; otherwise the root has no slug prefix
-- Top-level include named `api`: slug is `myapp.api` (or just `api` with no project)
-- An include named `lib` inside `api`: slug is `myapp.api.lib`
-- Slugs are dot-joined from the project name through the `includes` nesting path
-- Service identifiers follow the same pattern: `myapp.api.api-server`, `myapp.db.postgres`
-
-**Volume namespacing:**
-Volumes are automatically placed under `$NEXUS_HOME/volumes/<slug>/`. A community
-postgres repo that declares a volume named `data` gets stored at
-`$NEXUS_HOME/volumes/db/data` when included as `db`, and at
-`$NEXUS_HOME/volumes/db-replica/data` when included again as `db-replica`.
-There is no collision. The path in `nexus.yaml` is treated as a name, not an
-absolute path — nexus always resolves it to the namespaced location.
+**Volume namespacing**: volumes are stored at `$NEXUS_HOME/volumes/<url-path>/<name>`.
+Two deployments at different URLs can both declare a volume named `data` without
+any collision. The `name` in `nexus.yaml` is just a label; nexus resolves it to
+the full namespaced path.
 
 ---
 
 ## nexus.yaml Specification
 
-Every managed repo has a `nexus.yaml` at its root. There is no `name` field —
-names come from the include site. The root deployment has no name (it is the root).
+Every managed repo has a `nexus.yaml` at its root. The file has no name or identity
+declaration — identity comes entirely from the URL of the directory containing it.
 
 ### Minimal example (aggregator only)
 
 ```yaml
-# root nexus.yaml — no services, just wiring
-project: myapp   # optional; prefixes all slugs in the tree
+# github.com/myorg/my-system — root nexus.yaml, wiring only
 
 includes:
-  - name: db
-    url: https://github.com/nexus-community/postgres
+  - url: https://github.com/nexus-community/postgres
     ref: "@v15"
-  - name: api
-    url: https://github.com/myorg/api
+  - url: https://github.com/myorg/api
     ref: "@main"
     bind:
-      database: db.postgres
+      database: postgres.postgres   # short-name.service resolves unambiguously here
 ```
 
 ### Full example (repo with services)
 
 ```yaml
-# api/nexus.yaml
+# github.com/myorg/api — api/nexus.yaml
 
 # Optional: pull in further repos as independently managed deployments.
 includes:
-  - name: shared-lib
-    url: https://github.com/myorg/shared-lib
+  - url: https://github.com/myorg/shared-lib
     ref: "@main"
 
 # Runs once inside the new worktree before any services are started.
@@ -203,20 +225,13 @@ No hardcoded names, no knowledge of who includes it. The include site names it.
 
 ### Field Reference
 
-#### Top-level (root nexus.yaml only)
-
-| Field | Required | Description |
-|---|---|---|
-| `project` | no | Name prefix for all slugs in the tree. If set, the root slug is the project name and all child slugs are prefixed with it. Omitting it means the root has no slug prefix |
-
 #### `includes[]`
 
 | Field | Required | Description |
 |---|---|---|
-| `name` | yes | Local name for this include. Forms the slug segment. Used to address its services |
-| `url` | yes | Git-cloneable URL |
+| `url` | yes | Git-cloneable URL. Scheme-stripped, `.git`-removed form is the deployment's identity |
 | `ref` | no | Ref to track, prefixed with `@`. Defaults to `@main`. See ref syntax below |
-| `bind` | no | Map of `alias: <slug>.<service>` that resolves dependency aliases declared in that repo's services |
+| `bind` | no | Map of `alias: <address>` resolving dependency aliases declared in that repo's services. Address is `<short-name>.<service>` or the full `<url-path>.<service>` form |
 
 **Ref syntax:**
 
@@ -230,7 +245,7 @@ No hardcoded names, no knowledge of who includes it. The include site names it.
 
 | Field | Required | Description |
 |---|---|---|
-| `name` | yes | Identifier. Exposed as `$NEXUS_VOLUME_<NAME>` (uppercased). Stored at `$NEXUS_HOME/volumes/<slug>/<name>` |
+| `name` | yes | Identifier. Exposed as `$NEXUS_VOLUME_<NAME>` (uppercased). Stored at `$NEXUS_HOME/volumes/<url-path>/<name>` |
 
 #### `services[]`
 
@@ -246,12 +261,16 @@ No hardcoded names, no knowledge of who includes it. The include site names it.
 
 `depends_on` entries are resolved in this order:
 
-1. **Sibling service** — bare name matches a service in the same `nexus.yaml` → resolved directly
-2. **Bound alias** — name matches a key in the `bind:` map declared at this repo's include site → resolves to the bound service
-3. **Absolute reference** — name contains a `.` → treated as `<slug>.<service>` and looked up globally
+1. **Sibling service** — bare name with no `.` matches a service in the same `nexus.yaml` → resolved directly
+2. **Bound alias** — name matches a key in the `bind:` map provided by the parent that includes this repo → resolves to the bound address
+3. **Short-name address** — `<short-name>.<service>` where `short-name` is the last URL segment of any deployment in the tree → resolved if unambiguous
+4. **Full address** — `<url-path>.<service>` (e.g. `github.com/nexus-community/postgres.postgres`) → always unambiguous
 
-If a name cannot be resolved, nexus fails at startup with a clear error identifying
-the unresolved dependency and the include that declared it.
+If resolution is ambiguous (two deployments with the same short name), nexus fails at
+startup with a clear error and requires the full URL-path form.
+
+If a name cannot be resolved at all, nexus fails at startup with a clear error identifying
+the unresolved dependency and the deployment that declared it.
 
 Circular dependencies cause a startup error.
 
@@ -269,11 +288,11 @@ Circular dependencies cause a startup error.
 
 ```sh
 NEXUS_HOME=<path>
-NEXUS_SLUG=<dot-joined include path, e.g. api or api.lib>
+NEXUS_URL=<url-path identity, e.g. github.com/myorg/api>
 NEXUS_SHA=<full-commit-sha>
 NEXUS_REF=<branch-or-tag>
 NEXUS_WORKTREE=<absolute-path-to-this-worktree>
-NEXUS_VOLUME_<NAME>=<absolute-path>    # one per declared volume, name uppercased
+NEXUS_VOLUME_<NAME>=<absolute-path>    # one per declared volume; resolves to $NEXUS_HOME/volumes/<url-path>/<name>
 ```
 
 ---
@@ -314,11 +333,11 @@ always converges to the latest commit without processing every intermediate one.
    └── New SHA queued for repo
 
 2. CHECKOUT
-   └── git worktree add $NEXUS_HOME/repos/<slug>/worktrees/<sha> <sha>
+   └── git worktree add $NEXUS_HOME/repos/<url-path>/worktrees/<sha> <sha>
 
 3. BUILD  (inside the new worktree)
    ├── sh -c "<build command>"   (skipped if build is not declared)
-   ├── stdout/stderr → $NEXUS_HOME/logs/<slug>/<sha>-build.log
+   ├── stdout/stderr → $NEXUS_HOME/logs/<url-path>/<sha>-build.log
    ├── Exit 0 → proceed to SWAP
    └── Non-zero exit:
          remove worktree
@@ -390,12 +409,11 @@ The root nexus.yaml (or a dedicated include) manages nexus itself:
 
 ```yaml
 includes:
-  - name: nexus-core
-    url: https://github.com/rdkal/nexus
-    ref: main
+  - url: https://github.com/rdkal/nexus
+    ref: "@main"
 ```
 
-`nexus-core/nexus.yaml`:
+`github.com/rdkal/nexus` — nexus.yaml:
 ```yaml
 build: ./scripts/build.sh   # compiles/downloads new binary to $NEXUS_HOME/bin/nexus.next
 services:
@@ -424,35 +442,39 @@ other services continue running, unaware of the brief daemon restart.
 ## Cross-Service Coordination (Volumes)
 
 Services that need to share runtime information (connection strings, sockets,
-certificates) do so through **shared volumes** rather than through nexus itself.
+certificates) do so through volumes — each service reads from or writes to its
+own volume, and a consumer service uses a well-known convention to find the path.
 
-Example: postgres writes a `.env` file to its volume; api reads it on startup.
+Example: postgres writes a connection env file into its data volume. The api reads
+it by sourcing the file at the path nexus injects via `$NEXUS_VOLUME_DATA`.
 
 ```yaml
-# nexus-community/postgres nexus.yaml
+# github.com/nexus-community/postgres — nexus.yaml
 volumes:
   - name: data
 services:
   - name: postgres
     run: |
       echo "DATABASE_URL=postgresql://localhost:5432/app" > $NEXUS_VOLUME_DATA/db.env
-      postgres -D $NEXUS_VOLUME_DATA ...
+      postgres -D $NEXUS_VOLUME_DATA
 ```
 
 ```yaml
-# api/nexus.yaml
+# github.com/myorg/api — nexus.yaml
 services:
   - name: api-server
     run: |
-      . $NEXUS_VOLUME_DATABASE/db.env
+      . /path/to/postgres/data/db.env   # absolute path agreed by convention
       uvicorn app:main --port 8080
     depends_on:
       - database
 ```
 
-The `$NEXUS_VOLUME_DATABASE` variable is injected because the include site declares
-a binding, and nexus injects the bound service's volume path. (Exact mechanism TBD
-in implementation — for v1 the simpler path is an agreed absolute path convention.)
+**Cross-volume path sharing is unresolved in v1.** The consumer needs the absolute
+path to the postgres volume (`$NEXUS_HOME/volumes/github.com/nexus-community/postgres/data`),
+but nexus does not currently inject another deployment's volume paths. Options for v2:
+extend `bind:` to also wire volume paths, or add an explicit volume-export/import mechanism.
+For now, services can agree on a path via environment variables set in the host environment.
 
 ---
 
