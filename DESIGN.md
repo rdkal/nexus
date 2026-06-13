@@ -18,15 +18,16 @@ Nexus runs entirely in user space. No root required.
 
 | Concept | Description |
 |---|---|
-| **Service** | The smallest deployable atom. A named, long-running process that nexus starts, supervises, and stops |
-| **Repo** | A git repository with a `nexus.yaml`. Provides a build context (build command, volumes, worktree) for one or more services |
-| **Include** | A reference to another repo pulled into the deployment tree, given a local name at the include site |
-| **Worktree** | An isolated checkout of a repo at a specific commit SHA. One active worktree per repo |
+| **Deployment** | The unit nexus manages. One `nexus.yaml` = one deployment: a single build step, a set of volumes, and one or more services — all versioned and deployed together as a single atomic unit |
+| **Service** | A named long-running process within a deployment. All services in a deployment share the same build and worktree |
+| **Include** | A reference to another repo pulled into the deployment tree, given a local name at the include site. Included deployments are independent — they only redeploy when their own ref changes |
+| **Worktree** | An isolated checkout of a repo at a specific commit SHA. One active worktree per deployment |
 | **Volume** | A directory outside all worktrees that persists across deployments |
 | **Bind** | A wiring declaration at the include site that resolves a service's abstract dependency name to a concrete service in the tree |
 
-The key distinction: **repos are versioning and build units; services are runtime units.**
-Dependencies are between services, not between repos.
+A deployment is the rollout unit: all its services are built, stopped, and started together.
+`depends_on` between services expresses startup ordering only — there is no restart propagation.
+Included deployments are fully independent; they watch their own refs and deploy on their own schedule.
 
 ---
 
@@ -107,10 +108,11 @@ $NEXUS_HOME/                               default: ~/.nexus
 ```
 
 **Slug rules:**
-- Root repo slug: `root`
-- Top-level include named `api`: slug is `api`
-- An include named `lib` inside `api`: slug is `api.lib`
-- Slugs are dot-joined paths from root, matching the `includes` nesting
+- If `project: myapp` is set in the root nexus.yaml, the root slug is `myapp`; otherwise the root has no slug prefix
+- Top-level include named `api`: slug is `myapp.api` (or just `api` with no project)
+- An include named `lib` inside `api`: slug is `myapp.api.lib`
+- Slugs are dot-joined from the project name through the `includes` nesting path
+- Service identifiers follow the same pattern: `myapp.api.api-server`, `myapp.db.postgres`
 
 **Volume namespacing:**
 Volumes are automatically placed under `$NEXUS_HOME/volumes/<slug>/`. A community
@@ -131,13 +133,15 @@ names come from the include site. The root deployment has no name (it is the roo
 
 ```yaml
 # root nexus.yaml — no services, just wiring
+project: myapp   # optional; prefixes all slugs in the tree
+
 includes:
   - name: db
     url: https://github.com/nexus-community/postgres
-    ref: v15
+    ref: "@v15"
   - name: api
     url: https://github.com/myorg/api
-    ref: main
+    ref: "@main"
     bind:
       database: db.postgres
 ```
@@ -147,12 +151,11 @@ includes:
 ```yaml
 # api/nexus.yaml
 
-# Optional: pull in further repos this service depends on at the build level.
-# Runtime service dependencies are declared in services[].depends_on instead.
+# Optional: pull in further repos as independently managed deployments.
 includes:
   - name: shared-lib
     url: https://github.com/myorg/shared-lib
-    ref: main
+    ref: "@main"
 
 # Runs once inside the new worktree before any services are started.
 # Non-zero exit aborts the deployment; currently running services are untouched.
@@ -200,14 +203,28 @@ No hardcoded names, no knowledge of who includes it. The include site names it.
 
 ### Field Reference
 
+#### Top-level (root nexus.yaml only)
+
+| Field | Required | Description |
+|---|---|---|
+| `project` | no | Name prefix for all slugs in the tree. If set, the root slug is the project name and all child slugs are prefixed with it. Omitting it means the root has no slug prefix |
+
 #### `includes[]`
 
 | Field | Required | Description |
 |---|---|---|
 | `name` | yes | Local name for this include. Forms the slug segment. Used to address its services |
 | `url` | yes | Git-cloneable URL |
-| `ref` | no | Branch, tag, or SHA. Defaults to `main` |
+| `ref` | no | Ref to track, prefixed with `@`. Defaults to `@main`. See ref syntax below |
 | `bind` | no | Map of `alias: <slug>.<service>` that resolves dependency aliases declared in that repo's services |
+
+**Ref syntax:**
+
+| Value | Behaviour |
+|---|---|
+| `@main` | Track the tip of branch `main`. Redeploys on every new commit |
+| `@v15` | Pin to tag `v15`. Redeploys only if the tag is moved (rare) |
+| `@latest` | Track the highest semver tag. Nexus checks with `git ls-remote --tags --sort=-version:refname` and takes the top result. Redeploys when a new tag sorts higher |
 
 #### `volumes[]`
 
@@ -240,11 +257,11 @@ Circular dependencies cause a startup error.
 
 ### What depends_on does
 
-- **Startup ordering**: dependency services are started before this service
-- **Restart propagation**: when a dependency is redeployed (new commit lands), this
-  service is also restarted after the dependency's new version is healthy
-- **Crash handling**: if a dependency crashes and restarts (supervisor backoff), this
-  service is *not* automatically restarted — it is expected to reconnect on its own
+- **Startup ordering**: dependency services are started before this service, and
+  stopped after this service during shutdown (reverse order)
+- **Nothing else**: if a dependency crashes and is restarted by the supervisor, or
+  if a dependency's deployment is updated, dependent services are not touched.
+  Services are expected to handle reconnection on their own.
 
 ---
 
@@ -265,12 +282,30 @@ NEXUS_VOLUME_<NAME>=<absolute-path>    # one per declared volume, name uppercase
 
 ### Triggering
 
-Nexus polls `git fetch origin <ref>` on a 30-second interval per repo.
-When the fetched SHA differs from the last recorded SHA, a deployment is enqueued.
+Nexus polls each repo on a 30-second interval using `git ls-remote`, which is a
+lightweight ref-listing operation that downloads no objects:
 
-**Queuing rule**: at most one pending SHA per repo is held. If a new commit arrives
-while a build is in progress, it replaces any previously queued SHA. Nexus always
-converges to the latest commit without processing every intermediate one.
+```sh
+# branch
+git ls-remote origin refs/heads/main
+
+# tag
+git ls-remote origin refs/tags/v15
+
+# @latest — all tags sorted by version, take the highest
+git ls-remote --tags --sort=-version:refname origin 'refs/tags/*'
+```
+
+When the resolved SHA differs from the last recorded SHA for that deployment,
+a new deployment is enqueued.
+
+**Independent polling**: each deployment (each `nexus.yaml`) polls its own ref
+independently. An include is only redeployed when its own ref changes — not
+when its parent or a sibling is redeployed.
+
+**Queuing rule**: at most one pending SHA per deployment is held. If a new commit
+arrives while a build is in progress, it replaces any previously queued SHA. Nexus
+always converges to the latest commit without processing every intermediate one.
 
 ### Sequence
 
@@ -306,9 +341,7 @@ converges to the latest commit without processing every intermediate one.
    └── All alive → proceed
 
 6. PROMOTE
-   ├── Record new SHA as active in nexus.db
-   └── Restart-propagation: enqueue a deployment for every service
-       that declares depends_on pointing at a service in this repo
+   └── Record new SHA as active in nexus.db
 
 7. CLEANUP
    └── git worktree remove <old-sha>
@@ -458,8 +491,7 @@ POST /api/services/<id>/restart
 - Volume auto-namespacing by slug
 - Git polling (30s), worktree-based deployments
 - Build → SIGTERM old → start new lifecycle with rollback
-- Dependency-ordered startup and shutdown
-- Restart propagation on redeployment (not on crash)
+- Dependency-ordered startup and shutdown (no restart propagation)
 - Commit queuing (latest-wins, depth 1)
 - Process supervision with restart backoff and degraded state
 - Daemon-wide 30s shutdown grace period
@@ -486,7 +518,5 @@ POST /api/services/<id>/restart
    mechanism today only handles `depends_on` resolution. Should it also wire volume
    paths? Or is a conventions-based approach (agreed absolute paths) sufficient for v1?
 
-2. **Grace period per service**: daemon-wide 30s for v1. Worth making per-service in v2.
-
-3. **Root repo identity**: the root repo has slug `root`. Should this be configurable
-   so the UI label is more meaningful?
+2. **`@latest` tie-breaking**: when two tags sort equally under `version:refname`
+   (e.g. non-semver tag names), which wins? Proposal: fall back to tag creation date.
