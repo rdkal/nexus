@@ -117,29 +117,33 @@ $NEXUS_HOME/                                         default: ~/.nexus
 │
 ├── repos/
 │   │
-│   │   Bare clones and worktrees are stored at the URL-addressed path.
-│   │   Include names in the tree are symlinks into these URL-addressed directories.
-│   │   If the same URL is included twice (e.g. db and db-replica), both symlinks
-│   │   point to the same bare clone, and they share the same worktree at the same SHA.
+│   │   Bare clones are stored at the URL-addressed path and shared across all
+│   │   includes of the same URL — they are read-only git object stores.
+│   │   Worktrees are created per include-path instance so each deployment gets
+│   │   its own isolated working directory regardless of the source URL.
 │   │
-│   ├── github.com/nexus-community/postgres/         bare clone (URL-addressed)
-│   │   ├── .git/                                    (bare git repo)
-│   │   └── worktrees/
-│   │       └── <sha>/                               shared worktree — one per active SHA
+│   ├── github.com/nexus-community/postgres/
+│   │   └── .git/                                    bare clone (shared git objects)
 │   │
-│   ├── github.com/myorg/api/                        bare clone
-│   │   ├── .git/
-│   │   └── worktrees/
-│   │       └── <sha>/
+│   ├── github.com/myorg/api/
+│   │   └── .git/                                    bare clone
 │   │
-│   └── github.com/myorg/my-system/                  root deployment bare clone
-│       ├── .git/
+│   └── github.com/myorg/my-system/
+│       ├── .git/                                    root deployment bare clone
 │       ├── worktrees/
-│       │   └── <sha>/
-│       ├── db -> ../../nexus-community/postgres      symlink (include named "db")
-│       ├── db-replica -> ../../nexus-community/postgres  symlink (same URL, different name)
-│       └── api -> ../../myorg/api                   symlink (include named "api")
-│           (api's own includes would add further symlinks inside github.com/myorg/api/)
+│       │   └── <sha>/                               root's worktree
+│       ├── db/                                      include named "db" (cloned from postgres URL)
+│       │   └── worktrees/
+│       │       └── <sha>/                           db's own worktree
+│       ├── db-replica/                              same URL, separate worktree
+│       │   └── worktrees/
+│       │       └── <sha>/
+│       └── api/
+│           ├── worktrees/
+│           │   └── <sha>/
+│           └── shared-lib/                          api's own include
+│               └── worktrees/
+│                   └── <sha>/
 │
 ├── volumes/                                         persistent data, survives re-deployments
 │   └── github.com/myorg/my-system/
@@ -396,7 +400,9 @@ always converges to the latest commit without processing every intermediate one.
    └── New SHA queued for repo
 
 2. CHECKOUT
-   └── git worktree add $NEXUS_HOME/repos/<url-path>/worktrees/<sha> <sha>
+   └── git worktree add $NEXUS_HOME/repos/<include-path>/worktrees/<sha> <sha>
+       (git reads objects from the URL-addressed bare clone; worktree is written
+        at the include-path so each deployment instance has its own directory)
 
 3. BUILD  (inside the new worktree)
    ├── sh -c "<build command>"   (skipped if build is not declared)
