@@ -187,12 +187,12 @@ includes:
     url: https://github.com/nexus-community/postgres
     ref: "@v15"
     bind:
-      primary: db/services/postgres           # path relative to this nexus.yaml's position
+      primary: db/services/postgres           # parent-relative: sibling include "db", service "postgres"
   api:
     url: https://github.com/myorg/api
     ref: "@main"
     bind:
-      database: db/services/postgres
+      database: db/services/postgres          # same: api's "database" alias → db's postgres service
 ```
 
 ### Full example (repo with services)
@@ -263,7 +263,7 @@ in the address of every resource in that deployment and its descendants.
 |---|---|---|
 | `url` | yes | Git-cloneable URL. Only used to know what to clone — plays no role in addressing |
 | `ref` | no | Ref to track, prefixed with `@`. Defaults to `@main`. See ref syntax below |
-| `bind` | no | Map of `alias: <path>` resolving dependency aliases declared in that repo's services. Path is relative to the current nexus.yaml's position in the tree (e.g. `db/services/postgres`) |
+| `bind` | no | Map of `alias: <path>` resolving dependency aliases declared in that repo's services. Path is relative to the nexus.yaml that declares the `bind:` — i.e. the parent. `db/services/postgres` means: sibling include named `db`, service `postgres` |
 
 **Ref syntax:**
 
@@ -276,13 +276,13 @@ in the address of every resource in that deployment and its descendants.
 #### `volumes` (map)
 
 Key: the volume name. Exposed as `$NEXUS_VOLUME_<NAME>` (uppercased) in build and
-service commands. Stored at `$NEXUS_HOME/<url-path>/volumes/<name>/`.
+service commands. Stored at `$NEXUS_HOME/volumes/<include-path>/<name>/`.
 Currently no sub-fields; value is an empty map `{}`.
 
 #### `services` (map)
 
 Key: the service name. Must not be a reserved type segment (`services`, `volumes`, `flows`).
-Addressed externally as `<url-path>/services/<name>`.
+Addressed externally as `<include-path>/services/<name>`.
 
 | Field | Required | Description |
 |---|---|---|
@@ -321,13 +321,16 @@ reserved segment. Adding a new resource type in the future adds one new reserved
 2. **Bound alias** — name matches a key in the `bind:` map provided by the parent that includes this deployment → resolved to the bound path
 3. **Root-relative path** — `<include-name>/.../services/<service-name>`, resolved from the root of the tree → always unambiguous
 
-`bind:` values and root-relative `depends_on` paths are relative to the root deployment.
-For example, `db/services/postgres` means: find the include named `db` under the root,
-then the service named `postgres` within it.
+`bind:` paths are relative to the nexus.yaml that declares them — the parent of the
+included deployment. `db/services/postgres` in a root-level `bind:` means: the include
+named `db` under the root, then the service `postgres` within it.
 
-There is no short or partial form for cross-deployment references. If you want to
-reference a service in another deployment, either use a root-relative path or
-declare a `bind:` alias at the include site and use the alias as a bare name.
+`depends_on` explicit paths (those with `/`) are also parent-relative — they resolve
+from the same nexus.yaml that lists the service.
+
+There is no short or partial form for cross-deployment references. Either use a
+parent-relative path or declare a `bind:` alias at the include site and use the alias
+as a bare name.
 
 If a name cannot be resolved, nexus fails at startup with a clear error identifying
 the unresolved dependency and the deployment that declared it.
@@ -348,11 +351,11 @@ Circular dependencies cause a startup error.
 
 ```sh
 NEXUS_HOME=<path>
-NEXUS_URL=<url-path identity, e.g. github.com/myorg/api>
+NEXUS_ADDRESS=<include-path of this deployment, e.g. github.com/myorg/my-system/db>
 NEXUS_SHA=<full-commit-sha>
 NEXUS_REF=<branch-or-tag>
 NEXUS_WORKTREE=<absolute-path-to-this-worktree>
-NEXUS_VOLUME_<NAME>=<absolute-path>    # one per declared volume; resolves to $NEXUS_HOME/volumes/<url-path>/<name>
+NEXUS_VOLUME_<NAME>=<absolute-path>    # one per declared volume; resolves to $NEXUS_HOME/volumes/<include-path>/<name>
 ```
 
 ---
@@ -397,7 +400,7 @@ always converges to the latest commit without processing every intermediate one.
 
 3. BUILD  (inside the new worktree)
    ├── sh -c "<build command>"   (skipped if build is not declared)
-   ├── stdout/stderr → $NEXUS_HOME/logs/<url-path>/<sha>-build.log
+   ├── stdout/stderr → $NEXUS_HOME/logs/<include-path>/<sha>-build.log
    ├── Exit 0 → proceed to SWAP
    └── Non-zero exit:
          remove worktree
@@ -465,17 +468,19 @@ script that exec's `$NEXUS_HOME/bin/nexus`. It never changes.
 
 ### Self-update flow
 
-The root nexus.yaml (or a dedicated include) manages nexus itself:
+The root nexus.yaml includes nexus itself as a named deployment:
 
 ```yaml
 includes:
-  github.com/rdkal/nexus:
+  nexus:
+    url: https://github.com/rdkal/nexus
     ref: "@main"
 ```
 
 `github.com/rdkal/nexus` — nexus.yaml:
 ```yaml
-build: ./scripts/build.sh   # compiles/downloads new binary to $NEXUS_HOME/bin/nexus.next
+build: ./scripts/build.sh   # compiles new binary to $NEXUS_HOME/bin/nexus.next,
+                             # then atomically moves it to $NEXUS_HOME/bin/nexus
 services:
   nexus-daemon:
     run: $NEXUS_HOME/bin/nexus daemon
@@ -483,58 +488,22 @@ services:
 
 When a new nexus commit lands:
 
-1. **BUILD**: new binary is written to `$NEXUS_HOME/bin/nexus.next`
-   (old running binary is untouched — it's already exec'd into memory)
-2. **SWAP**: build script atomically moves `nexus.next` → `nexus`
-3. **SHUTDOWN**: nexus daemon receives SIGTERM on its own `nexus-daemon` service.
-   It writes all pending state to `nexus.db` and exits cleanly.
-4. The OS init system restarts `nexus-launcher`, which exec's the new binary.
-5. **STARTUP**: new nexus reads `nexus.db`, reconstructs the full service tree,
+1. **BUILD**: new binary compiled into `nexus.next`, atomically moved to `nexus`.
+   The old binary is already in memory — replacing the file has no effect on the running process.
+2. **SHUTDOWN**: nexus sends SIGTERM to its own `nexus-daemon` service (itself).
+   It writes all pending state to `nexus.db` and exits.
+3. The OS init system sees the process exit and restarts `nexus-launcher`, which
+   exec's `$NEXUS_HOME/bin/nexus` — now the new binary.
+4. **STARTUP**: new nexus reads `nexus.db`, reconstructs the full service tree,
    and resumes supervision of all other services.
 
-**Key invariant**: all nexus state lives in `nexus.db` and the filesystem. The
-new process reconstructs everything from disk with no handshake with the old one.
-The gap between SIGTERM and the new process being ready is the only downtime —
-other services continue running, unaware of the brief daemon restart.
+The key point: nexus does **not** try to spawn `nexus-daemon` as a child process.
+The OS service unit owns the restart. Nexus recognises it is managing itself and
+skips the STARTUP step for `nexus-daemon`, leaving it entirely to the init system.
 
----
-
-## Cross-Service Coordination (Volumes)
-
-Services that need to share runtime information (connection strings, sockets,
-certificates) do so through volumes — each service reads from or writes to its
-own volume, and a consumer service uses a well-known convention to find the path.
-
-Example: postgres writes a connection env file into its data volume. The api reads
-it by sourcing the file at the path nexus injects via `$NEXUS_VOLUME_DATA`.
-
-```yaml
-# github.com/nexus-community/postgres — nexus.yaml
-volumes:
-  - name: data
-services:
-  - name: postgres
-    run: |
-      echo "DATABASE_URL=postgresql://localhost:5432/app" > $NEXUS_VOLUME_DATA/db.env
-      postgres -D $NEXUS_VOLUME_DATA
-```
-
-```yaml
-# github.com/myorg/api — nexus.yaml
-services:
-  - name: api-server
-    run: |
-      . /path/to/postgres/data/db.env   # absolute path agreed by convention
-      uvicorn app:main --port 8080
-    depends_on:
-      - database
-```
-
-**Cross-volume path sharing is unresolved in v1.** The consumer needs the absolute
-path to the postgres volume (`$NEXUS_HOME/volumes/github.com/nexus-community/postgres/data`),
-but nexus does not currently inject another deployment's volume paths. Options for v2:
-extend `bind:` to also wire volume paths, or add an explicit volume-export/import mechanism.
-For now, services can agree on a path via environment variables set in the host environment.
+**Key invariant**: all state lives in `nexus.db` and the filesystem. The new
+process reconstructs everything from disk with no handshake with the old one.
+Other services keep running through the brief daemon restart.
 
 ---
 
@@ -543,24 +512,33 @@ For now, services can agree on a path via environment variables set in the host 
 Nexus serves a minimal HTTP UI on a configurable port (default `7777`).
 HTTP only, no authentication — intended for private network use.
 
+The UI URL scheme mirrors the resource address tree directly.
+
 ### Pages
 
 | Page | Content |
 |---|---|
-| `/` | All repos and services, current SHA, health at a glance |
-| `/repos/<slug>` | Deployment history, build log per SHA |
-| `/repos/<slug>/services/<name>` | Service status, restart count, live log tail |
-| `/volumes` | All volumes, path, disk usage |
+| `/` | Full deployment tree, current SHA per deployment, service health |
+| `/<include-path>` | Deployment detail: history, current SHA, build log |
+| `/<include-path>/services/<name>` | Service status, restart count, live log tail |
+| `/<include-path>/volumes` | Volumes declared in this deployment, disk usage |
+
+Examples:
+```
+/github.com/myorg/my-system/db
+/github.com/myorg/my-system/db/services/postgres
+/github.com/myorg/my-system/api/services/api-server
+```
 
 ### API
 
 ```
-GET  /api/repos
-GET  /api/repos/<slug>
-GET  /api/repos/<slug>/history
-POST /api/repos/<slug>/redeploy     re-run build + restart services at current SHA
-GET  /api/services
-POST /api/services/<id>/restart
+GET  /api/<include-path>
+GET  /api/<include-path>/history
+POST /api/<include-path>/redeploy      re-run build + restart services at current SHA
+GET  /api/<include-path>/services
+GET  /api/<include-path>/services/<name>
+POST /api/<include-path>/services/<name>/restart
 ```
 
 ---
@@ -570,8 +548,9 @@ POST /api/services/<id>/restart
 **In scope:**
 - Install script (`curl … | sh`)
 - `nexus.yaml` with `includes`, `build`, `volumes`, `services`, `depends_on`, `bind`
-- Volume auto-namespacing by slug
-- Git polling (30s), worktree-based deployments
+- Include-path-based addressing; volumes and logs namespaced by include-path
+- Bare clones at URL-path, worktrees shared across instances at the same SHA
+- Git polling via `git ls-remote` (30s), worktree-based deployments
 - Build → SIGTERM old → start new lifecycle with rollback
 - Dependency-ordered startup and shutdown (no restart propagation)
 - Commit queuing (latest-wins, depth 1)
@@ -579,7 +558,7 @@ POST /api/services/<id>/restart
 - Daemon-wide 30s shutdown grace period
 - Self-update via thin launcher
 - `NEXUS_HOME` configuration
-- Web UI (read-only + manual redeploy trigger)
+- Web UI at resource addresses (read-only + manual redeploy trigger)
 - REST API
 
 **Explicitly deferred:**
@@ -587,7 +566,7 @@ POST /api/services/<id>/restart
 - TLS / authentication on the web UI
 - Inbound webhooks (polling only for now)
 - Secret management
-- Cross-deployment shared volume injection (the `$NEXUS_VOLUME_DATABASE` example above)
+- Cross-deployment volume path injection (see Open Questions)
 - Multi-machine execution
 - Windows support
 
@@ -595,10 +574,12 @@ POST /api/services/<id>/restart
 
 ## Open Questions
 
-1. **Shared volume injection**: the cleanest way for services to share volume paths
-   across repos is through bound env var injection at the include site. The `bind:`
-   mechanism today only handles `depends_on` resolution. Should it also wire volume
-   paths? Or is a conventions-based approach (agreed absolute paths) sufficient for v1?
+1. **Cross-deployment volume paths**: a service in one deployment sometimes needs the
+   volume path of a service in another deployment (e.g. api needs to know where postgres
+   wrote its socket or env file). The `bind:` mechanism currently only resolves service
+   names for `depends_on`. Extending it to also wire volume paths would solve this:
+   `bind: { db-data: db/volumes/data }` → injects `$NEXUS_BIND_DB_DATA=<path>`.
+   Deferred to v2; v1 services coordinate via well-known host paths or out-of-band env vars.
 
-2. **`@latest` tie-breaking**: when two tags sort equally under `version:refname`
-   (e.g. non-semver tag names), which wins? Proposal: fall back to tag creation date.
+2. **`@latest` tie-breaking**: non-semver tag names that sort equally under
+   `version:refname` fall back to tag creation date. Decided — no further action needed.
