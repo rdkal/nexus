@@ -5,7 +5,7 @@
 Nexus is a git-native process manager and deployment system. It turns a collection
 of git repositories into a self-managing, continuously-deployed system running
 directly on the host — no containers, no cloud primitives. The only delivery
-mechanism is git; the only configuration format is YAML.
+mechanism is git.
 
 A single `curl` invocation installs the daemon. From that point, everything —
 including updates to nexus itself — is driven by commits.
@@ -35,8 +35,13 @@ Included deployments are fully independent; they watch their own refs and deploy
 
 ```sh
 curl https://github.com/rdkal/nexus/raw/main/install.sh | sh -s -- \
-  --source https://github.com/myorg/my-system
+  --source https://github.com/myorg/system-a \
+  --source https://github.com/myorg/system-b
 ```
+
+`--source` can be given multiple times. Each is an independently watched deployment
+tree, addressed from its own URL root. Sources can also be added or removed after
+installation with `nexus source add <url>` and `nexus source remove <url>`.
 
 The install script:
 
@@ -46,7 +51,7 @@ The install script:
 4. Registers and starts a user-mode service pointing at `nexus-launcher`:
    - Linux: `systemctl --user enable/start nexus`
    - macOS: `launchctl load ~/Library/LaunchAgents/nexus.plist`
-5. Clones the `--source` repo as the root of the deployment tree
+5. Clones each `--source` repo and begins watching it
 
 No root or sudo required.
 
@@ -67,39 +72,25 @@ or relocate state to a larger disk.
 
 ---
 
-## Deployment Identity and Resource Addressing
+## Resource Addressing
 
-The **root deployment** is the repo pointed at by `--source` at install time. Its URL
-path (scheme stripped, `.git` removed) is the root of the entire address space:
-
-```
-https://github.com/myorg/my-system   →   github.com/myorg/my-system
-```
-
-Every resource in the system — services, volumes, included deployments — has an address
-that starts from this root. Includes are named at the include site, and those names
-form path segments:
+A deployment's address is its source URL with the scheme stripped:
 
 ```
-github.com/myorg/my-system/db/services/postgres    service "postgres" in include "db"
-github.com/myorg/my-system/api/services/api-server service "api-server" in include "api"
-github.com/myorg/my-system/api/volumes/uploads     volume "uploads" in include "api"
-github.com/myorg/my-system/db/volumes/data         volume "data" in include "db"
+https://github.com/myorg/my-system  →  github.com/myorg/my-system
 ```
 
-The URL of the included repo (`github.com/nexus-community/postgres`) is only used
-to know what to clone. It plays no role in addressing. This means:
+Include names form path segments beneath it. Resources are addressed as:
 
-- The same repo can be included twice under different names — they become fully
-  independent deployments with separate worktrees, volumes, and addresses:
-  ```
-  github.com/myorg/my-system/db/services/postgres        primary
-  github.com/myorg/my-system/db-replica/services/postgres  replica
-  ```
-- Included deployments can themselves have includes. The path simply grows:
-  ```
-  github.com/myorg/my-system/api/shared-lib/services/something
-  ```
+```
+github.com/myorg/my-system/db/services/postgres
+github.com/myorg/my-system/api/volumes/uploads
+github.com/myorg/my-system/api/shared-lib/services/something
+```
+
+The URL of the included repo is only used to know what to clone — it plays no role
+in addressing. The same repo included twice under different names becomes two
+independent deployments at two distinct addresses with separate worktrees and volumes.
 
 ---
 
