@@ -115,23 +115,31 @@ $NEXUS_HOME/                                         default: ~/.nexus
 │
 ├── nexus.db                                         sqlite: deployment state, service state
 │
-├── repos/                                           git clones and worktrees
-│   └── github.com/myorg/my-system/                  root deployment
-│       ├── .git/                                    bare clone of the root repo URL
+├── repos/
+│   │
+│   │   Bare clones and worktrees are stored at the URL-addressed path.
+│   │   Include names in the tree are symlinks into these URL-addressed directories.
+│   │   If the same URL is included twice (e.g. db and db-replica), both symlinks
+│   │   point to the same bare clone, and they share the same worktree at the same SHA.
+│   │
+│   ├── github.com/nexus-community/postgres/         bare clone (URL-addressed)
+│   │   ├── .git/                                    (bare git repo)
+│   │   └── worktrees/
+│   │       └── <sha>/                               shared worktree — one per active SHA
+│   │
+│   ├── github.com/myorg/api/                        bare clone
+│   │   ├── .git/
+│   │   └── worktrees/
+│   │       └── <sha>/
+│   │
+│   └── github.com/myorg/my-system/                  root deployment bare clone
+│       ├── .git/
 │       ├── worktrees/
-│       │   └── <sha>/                               checked-out worktree per deployment attempt
-│       ├── db/                                      include named "db"
-│       │   ├── .git/                                bare clone of db's url:
-│       │   └── worktrees/
-│       │       └── <sha>/
-│       └── api/                                     include named "api"
-│           ├── .git/
-│           ├── worktrees/
-│           │   └── <sha>/
-│           └── shared-lib/                          api's own include "shared-lib"
-│               ├── .git/
-│               └── worktrees/
-│                   └── <sha>/
+│       │   └── <sha>/
+│       ├── db -> ../../nexus-community/postgres      symlink (include named "db")
+│       ├── db-replica -> ../../nexus-community/postgres  symlink (same URL, different name)
+│       └── api -> ../../myorg/api                   symlink (include named "api")
+│           (api's own includes would add further symlinks inside github.com/myorg/api/)
 │
 ├── volumes/                                         persistent data, survives re-deployments
 │   └── github.com/myorg/my-system/
