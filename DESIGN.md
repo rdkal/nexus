@@ -105,72 +105,59 @@ to know what to clone. It plays no role in addressing. This means:
 
 ## Directory Layout
 
-The filesystem mirrors the address tree exactly. Everything for the entire system
-lives under `$NEXUS_HOME/<root-url>/`, with includes as subdirectories within their
-parent's directory.
+Three top-level trees, each mirroring the same address structure:
 
 ```
-$NEXUS_HOME/                                        default: ~/.nexus
+$NEXUS_HOME/                                         default: ~/.nexus
 │
 ├── bin/
-│   └── nexus                                       nexus daemon binary (updated by deployments)
+│   └── nexus                                        nexus daemon binary
 │
-├── nexus.db                                        sqlite: deployment state, service state
+├── nexus.db                                         sqlite: deployment state, service state
 │
-└── github.com/
-    └── myorg/
-        └── my-system/                              root deployment
-            ├── .git/                               bare clone of github.com/myorg/my-system
-            ├── worktrees/
-            │   └── <sha>/                          checked-out worktree per deployment attempt
-            ├── builds/
-            │   └── <sha>.log                       build log per commit
-            ├── services/                           services defined in my-system/nexus.yaml
-            │   └── <service-name>/
-            │       └── logs/
-            ├── volumes/                            volumes defined in my-system/nexus.yaml
-            │   └── <volume-name>/
-            │
-            ├── db/                                 include named "db" → github.com/nexus-community/postgres
-            │   ├── .git/                           bare clone of that URL
-            │   ├── worktrees/
-            │   │   └── <sha>/
-            │   ├── builds/
-            │   │   └── <sha>.log
-            │   ├── services/
-            │   │   └── postgres/
-            │   │       └── logs/
-            │   └── volumes/
-            │       └── data/                       actual postgres data
-            │
-            ├── db-replica/                         same URL, different name → independent clone
-            │   ├── .git/
-            │   ├── worktrees/ ...
-            │   ├── services/ ...
-            │   └── volumes/ ...
-            │
-            └── api/                                include named "api" → github.com/myorg/api
-                ├── .git/
-                ├── worktrees/ ...
-                ├── builds/ ...
-                ├── services/
-                │   └── api-server/
-                │       └── logs/
-                ├── volumes/
-                │   └── uploads/
-                └── shared-lib/                     api's own include, named "shared-lib"
-                    ├── .git/
-                    ├── worktrees/ ...
-                    ├── services/ ...
-                    └── volumes/ ...
+├── repos/                                           git clones and worktrees
+│   └── github.com/myorg/my-system/                  root deployment
+│       ├── .git/                                    bare clone of the root repo URL
+│       ├── worktrees/
+│       │   └── <sha>/                               checked-out worktree per deployment attempt
+│       ├── db/                                      include named "db"
+│       │   ├── .git/                                bare clone of db's url:
+│       │   └── worktrees/
+│       │       └── <sha>/
+│       └── api/                                     include named "api"
+│           ├── .git/
+│           ├── worktrees/
+│           │   └── <sha>/
+│           └── shared-lib/                          api's own include "shared-lib"
+│               ├── .git/
+│               └── worktrees/
+│                   └── <sha>/
+│
+├── volumes/                                         persistent data, survives re-deployments
+│   └── github.com/myorg/my-system/
+│       ├── db/
+│       │   └── data/                                volume "data" declared in db's nexus.yaml
+│       └── api/
+│           └── uploads/                             volume "uploads" declared in api's nexus.yaml
+│
+└── logs/                                            build and service logs
+    └── github.com/myorg/my-system/
+        ├── <sha>-build.log                          build log for root deployment
+        ├── db/
+        │   ├── <sha>-build.log
+        │   └── services/
+        │       └── postgres/
+        │           └── current.log                  rotated service log
+        └── api/
+            ├── <sha>-build.log
+            └── services/
+                └── api-server/
+                    └── current.log
 ```
 
-Address and filesystem path correspond directly:
-
-```
-github.com/myorg/my-system/db/services/postgres          address
-$NEXUS_HOME/github.com/myorg/my-system/db/services/postgres/logs/    filesystem
-```
+Each tree mirrors the address structure — the same path segments, just rooted under
+`repos/`, `volumes/`, or `logs/`. Operationally this matters: volumes are the only
+thing that must be backed up; repos and logs can be freely wiped and rebuilt.
 
 ---
 
