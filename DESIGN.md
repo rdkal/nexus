@@ -37,8 +37,8 @@ Included deployments are fully independent; they watch their own refs and deploy
 
 ```sh
 curl https://github.com/rdkal/nexus/raw/main/install.sh | sh -s -- \
-  --project https://github.com/myorg/system-a \
-  --project https://github.com/myorg/system-b
+  --project github.com/myorg/system-a \
+  --project github.com/myorg/system-b
 ```
 
 `--project` can be given multiple times. Each URL is a root deployment that nexus
@@ -80,17 +80,18 @@ There are two distinct kinds of names in nexus. They serve different purposes an
 
 ### Spec paths
 
-A spec path is the git URL of a `nexus.yaml`. It tells nexus what to clone:
+A spec path identifies a `nexus.yaml` by where it lives — without any protocol prefix:
 
 ```
-https://github.com/myorg/my-system
-https://github.com/nexus-community/postgres
-https://github.com/myorg/monorepo/services/api
+github.com/myorg/my-system
+github.com/nexus-community/postgres
+github.com/myorg/monorepo/services/api
 ```
 
 Spec paths appear in `url:` fields inside `includes:` and in `--project` flags at install
-time. They are only ever used for git operations — cloning, polling, worktree checkout.
-Spec paths play no role in identifying resources at runtime.
+time. Nexus resolves the actual transport (SSH, HTTPS, local) from the git CLI configuration,
+so no scheme is needed. Spec paths are only ever used for git operations — cloning, polling,
+worktree checkout. They play no role in identifying resources at runtime.
 
 ### Resource names
 
@@ -99,9 +100,9 @@ Resource names identify everything within the nexus universe.
 **Project name**: the final path segment of the spec path:
 
 ```
-https://github.com/myorg/my-system           →  my-system
-https://github.com/nexus-community/postgres  →  postgres
-https://github.com/myorg/monorepo/services/api  →  api
+github.com/myorg/my-system           →  my-system
+github.com/nexus-community/postgres  →  postgres
+github.com/myorg/monorepo/services/api  →  api
 ```
 
 Project names are **globally unique** within a nexus instance.
@@ -208,10 +209,10 @@ the project name is inferred from the spec path used to clone it.
 
 includes:
   db:                                         # include alias — "db" becomes the address segment
-    url: https://github.com/nexus-community/postgres
+    url: github.com/nexus-community/postgres
     ref: "@v15"
   api:
-    url: https://github.com/myorg/api
+    url: github.com/myorg/api
     ref: "@main"
     bind:
       database: db/postgres                   # alias "database" → postgres service in db include
@@ -225,7 +226,7 @@ includes:
 
 includes:
   shared-lib:
-    url: https://github.com/myorg/shared-lib
+    url: github.com/myorg/shared-lib
     ref: "@main"
 
 # Runs once inside the new worktree before any services are started.
@@ -281,7 +282,7 @@ sub-deployment. Must be unique within this `nexus.yaml` alongside all service an
 
 | Field | Required | Description |
 |---|---|---|
-| `url` | yes | Spec path as a clonable URL. Used only for git operations — plays no role in addressing |
+| `url` | yes | Spec path (no scheme). Nexus resolves the transport from git CLI config. Used only for git operations — plays no role in addressing |
 | `ref` | no | Ref to track, prefixed with `@`. Defaults to `@main`. See ref syntax below |
 | `bind` | no | Map of `alias: <target>` resolving dependency aliases. Resolution rules TBD — see Open Questions |
 
@@ -467,7 +468,7 @@ Nexus manages itself by including its own repo:
 ```yaml
 includes:
   nexus:
-    url: https://github.com/rdkal/nexus
+    url: github.com/rdkal/nexus
     ref: "@main"
 ```
 
