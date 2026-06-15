@@ -18,18 +18,16 @@ Nexus runs entirely in user space. No root required.
 
 | Concept | Description |
 |---|---|
-| **Project** | The named root of a deployment tree. Every `nexus.yaml` belongs to a project whose name is the final path segment of its git URL — globally unique within a nexus instance |
-| **App** | An included project. When one project includes another, the included deployment becomes an app addressed by the include alias the parent assigns |
-| **Deployment** | The rollout unit nexus manages. One `nexus.yaml` = one deployment: a single build step, a set of volumes, and one or more services — all versioned and deployed together |
+| **Project** | The fundamental unit in nexus. Defined by a `nexus.yaml`: a name, an optional build step, volumes, services, and nested projects. Projects compose recursively — a project's `projects:` field lists other projects, each of which is the same type |
+| **Deployment** | One running instance of a project at a specific commit SHA. One `nexus.yaml` = one deployment: build, volumes, and services all versioned and rolled out together |
 | **Service** | A named long-running process within a deployment. All services in a deployment share the same build and worktree |
 | **Volume** | A named directory outside all worktrees that persists across deployments |
-| **Include** | A declaration that pulls another repo into the deployment tree under a local alias. The alias becomes the address segment for all resources in that sub-deployment |
 | **Worktree** | An isolated checkout of a repo at a specific commit SHA. One active worktree per deployment |
-| **Bind** | A wiring declaration at the include site that resolves a service's abstract dependency alias to a concrete resource |
+| **Bind** | A wiring declaration in a `projects:` entry that resolves a service's abstract dependency alias to a concrete resource in the tree |
 
 A deployment is the rollout unit: all its services are built, stopped, and started together.
 `depends_on` between services expresses startup ordering only — there is no restart propagation.
-Included deployments are fully independent; they watch their own refs and deploy on their own schedule.
+Nested projects are fully independent; they watch their own refs and deploy on their own schedule.
 
 ---
 
@@ -95,7 +93,7 @@ github.com/nexus-community/postgres
 github.com/myorg/monorepo/services/api
 ```
 
-Spec paths appear in `url:` fields inside `includes:` and in `--project` flags at install
+Spec paths appear in `url:` fields inside `projects:` and in `--project` flags at install
 time. Nexus resolves the actual transport (SSH, HTTPS, local) from the git CLI configuration,
 so no scheme is needed. Spec paths are only ever used for git operations — cloning, polling,
 worktree checkout. They play no role in identifying resources at runtime.
@@ -107,7 +105,7 @@ Resource names identify everything within the nexus universe.
 **Project name**: defaults to the final path segment of the spec path, but can be
 overridden at the point of adding or including — never inside `nexus.yaml` itself.
 Keeping the name out of the file is what makes a `nexus.yaml` fully composable: the
-same file can be added as a root project under any name, or included under any alias.
+same file can be added as a root project under any name, or nested under any alias.
 
 ```
 github.com/myorg/my-system           →  my-system      (default)
@@ -117,27 +115,27 @@ github.com/myorg/monorepo/services/api  →  api         (default)
 
 Project names are **globally unique** within a nexus instance.
 
-**Include alias**: the key used in the parent's `includes:` map. When a project includes
+**Project alias**: the key used in the parent's `projects:` map. When a project nests
 another, the alias becomes the address segment for that sub-deployment. It must be unique
 within the parent project alongside all service and volume names.
 
 **Resource name**: service and volume names declared in `nexus.yaml`. Must be unique within
-their deployment — no two resources of any type (services, volumes, or include aliases) in
+their deployment — no two resources of any type (services, volumes, or project aliases) in
 the same `nexus.yaml` may share a name.
 
 **Full resource address**: `<project-name>/<alias-or-resource>`, with no type segment.
 The project name is always the first segment:
 
 ```
-my-system/db              the "db" include within project my-system
-my-system/db/postgres     service "postgres" in the db include
-my-system/db/data         volume "data" in the db include
-my-system/api/api-server  service "api-server" in the api include
-my-system/api/uploads     volume "uploads" in the api include
+my-system/db              the "db" nested project within my-system
+my-system/db/postgres     service "postgres" in the db project
+my-system/db/data         volume "data" in the db project
+my-system/api/api-server  service "api-server" in the api project
+my-system/api/uploads     volume "uploads" in the api project
 ```
 
 **Short name**: a bare name with no slash. Within a deployment, resources can be
-referenced by short name alone — sibling services, sibling volumes, and sibling includes.
+referenced by short name alone — sibling services, sibling volumes, and sibling projects.
 The presence of a `/` distinguishes a full address from a short name.
 
 ---
@@ -157,7 +155,7 @@ $NEXUS_HOME/                                         default: ~/.nexus
 ├── repos/                                           keyed by spec path (URL without scheme)
 │   │
 │   │   Bare clones live at the spec-path and are shared read-only git object stores.
-│   │   Worktrees live under the root deployment's spec-path, named by include alias.
+│   │   Worktrees live under the root deployment's spec-path, named by project alias.
 │   │
 │   ├── github.com/nexus-community/postgres/
 │   │   └── .git/                                    bare clone (shared git objects)
@@ -169,22 +167,22 @@ $NEXUS_HOME/                                         default: ~/.nexus
 │       ├── .git/                                    bare clone for my-system
 │       ├── worktrees/
 │       │   └── <sha>/                               my-system's own worktree
-│       ├── db/                                      worktrees for the "db" include
+│       ├── db/                                      worktrees for the "db" nested project
 │       │   └── worktrees/
 │       │       └── <sha>/
-│       └── api/                                     worktrees for the "api" include
+│       └── api/                                     worktrees for the "api" nested project
 │           ├── worktrees/
 │           │   └── <sha>/
-│           └── shared-lib/                          worktrees for api's "shared-lib" include
+│           └── shared-lib/                          worktrees for api's "shared-lib" project
 │               └── worktrees/
 │                   └── <sha>/
 │
 ├── volumes/                                         keyed by full resource address
 │   └── my-system/
 │       ├── db/
-│       │   └── data/                                volume "data" in the db include
+│       │   └── data/                                volume "data" in the db project
 │       └── api/
-│           └── uploads/                             volume "uploads" in the api include
+│           └── uploads/                             volume "uploads" in the api project
 │
 └── logs/                                            keyed by full resource address
     └── my-system/
@@ -199,7 +197,7 @@ $NEXUS_HOME/                                         default: ~/.nexus
                 └── current.log
 ```
 
-`repos/` is keyed by spec path so bare clones are shared across all includes of the same
+`repos/` is keyed by spec path so bare clones are shared across all projects with the same
 URL. `volumes/` and `logs/` are keyed by resource address starting from the root project
 name. Operationally: volumes are the only thing that must be backed up; repos and logs
 can be freely wiped and rebuilt.
@@ -209,7 +207,9 @@ can be freely wiped and rebuilt.
 ## nexus.yaml Specification
 
 Every managed repo has a `nexus.yaml` at its root. The file declares no project name —
-naming always happens at the site where a project is added or included.
+naming always happens at the site where a project is added or nested. The schema is
+self-referential: a project's `projects:` field lists other projects, each described
+the same way.
 
 ### Minimal example (aggregator only)
 
@@ -217,24 +217,24 @@ naming always happens at the site where a project is added or included.
 # spec path: github.com/myorg/my-system
 # project name: my-system
 
-includes:
-  db:                                         # include alias — "db" becomes the address segment
+projects:
+  db:                                         # project alias — "db" becomes the address segment
     url: github.com/nexus-community/postgres
     ref: "@v15"
   api:
     url: github.com/myorg/api
     ref: "@main"
     bind:
-      database: db/postgres                   # alias "database" → postgres service in db include
+      database: db/postgres                   # alias "database" → postgres service in db project
 ```
 
-### Full example (repo with services)
+### Full example (project with services)
 
 ```yaml
 # spec path: github.com/myorg/api
 # project name: api
 
-includes:
+projects:
   shared-lib:
     url: github.com/myorg/shared-lib
     ref: "@main"
@@ -253,8 +253,8 @@ services:
   api-server:
     run: uvicorn app:main --host 0.0.0.0 --port 8080
     depends_on:
-      - database        # abstract alias — resolved by bind: at the include site
-      - api-worker      # short name — sibling service in this deployment
+      - database        # abstract alias — resolved by bind: at the projects: entry
+      - api-worker      # short name — sibling service in this project
 
   api-worker:
     run: celery -A app.tasks worker --concurrency 4
@@ -278,17 +278,17 @@ services:
     run: postgres -D $NEXUS_VOLUME_DATA -c listen_addresses='*' -p 5432
 ```
 
-A parent that includes this under alias `db` addresses its resources as
+A parent that nests this under alias `db` addresses its resources as
 `<root>/db/postgres` and `<root>/db/data`.
 
 ---
 
 ### Field Reference
 
-#### `includes` (map)
+#### `projects` (map)
 
-Key: local alias for this include. Becomes the address segment for all resources in the
-sub-deployment. Must be unique within this `nexus.yaml` alongside all service and volume names.
+Key: local alias for the nested project. Becomes the address segment for all resources
+within it. Must be unique within this `nexus.yaml` alongside all service and volume names.
 
 | Field | Required | Description |
 |---|---|---|
@@ -306,13 +306,13 @@ sub-deployment. Must be unique within this `nexus.yaml` alongside all service an
 
 #### `volumes` (map)
 
-Key: volume name. Unique within this deployment alongside service names and include aliases.
+Key: volume name. Unique within this deployment alongside service names and project aliases.
 Exposed as `$NEXUS_VOLUME_<NAME>` (uppercased) in build and service commands. Stored at
 `$NEXUS_HOME/volumes/<resource-address>/`. Currently no sub-fields; value is an empty map `{}`.
 
 #### `services` (map)
 
-Key: service name. Unique within this deployment alongside volume names and include aliases.
+Key: service name. Unique within this deployment alongside volume names and project aliases.
 
 | Field | Required | Description |
 |---|---|---|
@@ -325,9 +325,9 @@ Key: service name. Unique within this deployment alongside volume names and incl
 
 - **Project names** are globally unique within a nexus instance. Nexus validates at startup
   and rejects configurations where two projects share a name.
-- **Resource names** — services, volumes, and include aliases — must all be unique within
+- **Resource names** — services, volumes, and project aliases — must all be unique within
   the same `nexus.yaml`. A service and a volume may not share a name; nor may a service and
-  an include alias.
+  a project alias.
 - No reserved words. Without type segments in addresses there is no ambiguity to guard against.
 
 ---
@@ -338,8 +338,8 @@ Key: service name. Unique within this deployment alongside volume names and incl
 (see Open Questions). The established semantics:
 
 - **Short name** (no slash): sibling service in the same deployment. Always unambiguous.
-- **Cross-deployment**: use a `bind:` alias at the include site. The parent maps an abstract
-  alias to a concrete resource; the included service uses the bare alias as a short name in
+- **Cross-project**: use a `bind:` alias in the `projects:` entry. The parent maps an abstract
+  alias to a concrete resource; the nested service uses the bare alias as a short name in
   `depends_on`.
 - Full address forms and `bind:` path syntax are TBD.
 
@@ -385,8 +385,8 @@ git ls-remote --tags --sort=-version:refname origin 'refs/tags/*'
 
 When the resolved SHA differs from the last recorded SHA, a new deployment is enqueued.
 
-**Independent polling**: each deployment polls its own ref independently. An include is
-only redeployed when its own ref changes — not when its parent or a sibling redeploys.
+**Independent polling**: each deployment polls its own ref independently. A nested project
+is only redeployed when its own ref changes — not when its parent or a sibling redeploys.
 
 **Queuing rule**: at most one pending SHA per deployment is held. If a new commit arrives
 while a build is in progress, it replaces the queued SHA. Nexus always converges to the
@@ -401,7 +401,7 @@ latest commit without processing every intermediate one.
 2. CHECKOUT
    └── git worktree add <worktree-path> <sha>
        (objects read from the spec-path bare clone;
-        worktree placed under the root deployment's repo dir, named by include alias)
+        worktree placed under the root deployment's repo dir, named by project alias)
 
 3. BUILD  (inside the new worktree)
    ├── sh -c "<build command>"   (skipped if build is not declared)
@@ -473,10 +473,10 @@ that exec's `$NEXUS_HOME/bin/nexus`. It never changes.
 
 ### Self-update flow
 
-Nexus manages itself by including its own repo:
+Nexus manages itself by nesting its own repo:
 
 ```yaml
-includes:
+projects:
   nexus:
     url: github.com/rdkal/nexus
     ref: "@main"
@@ -525,7 +525,7 @@ The UI URL scheme mirrors the resource name tree.
 |---|---|
 | `/` | All projects, current SHA per deployment, service health |
 | `/<project-name>` | Project detail: history, current SHA, build log |
-| `/<project-name>/<alias>` | App detail for an included deployment |
+| `/<project-name>/<alias>` | Nested project detail |
 | `/<project-name>/.../<name>` | Service status and live log tail, or volume info |
 
 Examples:
@@ -554,9 +554,9 @@ POST /api/<project-name>/services/<name>/restart
 
 **In scope:**
 - Install script (`curl … | sh`) with multiple `--project` flags
-- `nexus.yaml` with `includes`, `build`, `volumes`, `services`, `depends_on`, `bind`
+- `nexus.yaml` with `projects`, `build`, `volumes`, `services`, `depends_on`, `bind`
 - Project-name-based resource addressing; volumes and logs namespaced by resource address
-- Bare clones at spec-path, worktrees per deployment instance named by include alias
+- Bare clones at spec-path, worktrees per deployment instance named by project alias
 - Git polling via `git ls-remote` (30s), worktree-based deployments
 - Build → SIGTERM old → start new lifecycle with rollback
 - Dependency-ordered startup and shutdown (no restart propagation)
