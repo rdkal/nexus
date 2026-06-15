@@ -38,12 +38,19 @@ Included deployments are fully independent; they watch their own refs and deploy
 ```sh
 curl https://github.com/rdkal/nexus/raw/main/install.sh | sh -s -- \
   --project github.com/myorg/system-a \
-  --project github.com/myorg/system-b
+  --project github.com/myorg/system-b \
+  --project github.com/myorg/system-c:my-custom-name   # optional name override
 ```
 
-`--project` can be given multiple times. Each URL is a root deployment that nexus
-clones and watches independently. Projects can also be added or removed after
-installation with `nexus project add <url>` and `nexus project remove <url>`.
+`--project` can be given multiple times. The spec path after `:` sets a custom project
+name; omitting it defaults to the final path segment. Projects can also be added or
+removed after installation:
+
+```sh
+nexus project add github.com/myorg/system-a
+nexus project add github.com/myorg/system-a:my-custom-name
+nexus project remove my-system
+```
 
 The install script:
 
@@ -98,7 +105,9 @@ worktree checkout. They play no role in identifying resources at runtime.
 Resource names identify everything within the nexus universe.
 
 **Project name**: defaults to the final path segment of the spec path, but can be
-overridden with an explicit `name:` field in `nexus.yaml`:
+overridden at the point of adding or including — never inside `nexus.yaml` itself.
+Keeping the name out of the file is what makes a `nexus.yaml` fully composable: the
+same file can be added as a root project under any name, or included under any alias.
 
 ```
 github.com/myorg/my-system           →  my-system      (default)
@@ -199,8 +208,8 @@ can be freely wiped and rebuilt.
 
 ## nexus.yaml Specification
 
-Every managed repo has a `nexus.yaml` at its root. The project name defaults to the
-final segment of the spec path but can be overridden with a top-level `name:` field.
+Every managed repo has a `nexus.yaml` at its root. The file declares no project name —
+naming always happens at the site where a project is added or included.
 
 ### Minimal example (aggregator only)
 
@@ -275,15 +284,6 @@ A parent that includes this under alias `db` addresses its resources as
 ---
 
 ### Field Reference
-
-#### `name` (string, optional)
-
-Overrides the project name. Defaults to the final segment of the spec path. Must be
-globally unique within the nexus instance.
-
-```yaml
-name: my-custom-name
-```
 
 #### `includes` (map)
 
