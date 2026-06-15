@@ -97,12 +97,13 @@ worktree checkout. They play no role in identifying resources at runtime.
 
 Resource names identify everything within the nexus universe.
 
-**Project name**: the final path segment of the spec path:
+**Project name**: defaults to the final path segment of the spec path, but can be
+overridden with an explicit `name:` field in `nexus.yaml`:
 
 ```
-github.com/myorg/my-system           →  my-system
-github.com/nexus-community/postgres  →  postgres
-github.com/myorg/monorepo/services/api  →  api
+github.com/myorg/my-system           →  my-system      (default)
+github.com/nexus-community/postgres  →  postgres       (default)
+github.com/myorg/monorepo/services/api  →  api         (default)
 ```
 
 Project names are **globally unique** within a nexus instance.
@@ -198,8 +199,8 @@ can be freely wiped and rebuilt.
 
 ## nexus.yaml Specification
 
-Every managed repo has a `nexus.yaml` at its root. The file declares no project name —
-the project name is inferred from the spec path used to clone it.
+Every managed repo has a `nexus.yaml` at its root. The project name defaults to the
+final segment of the spec path but can be overridden with a top-level `name:` field.
 
 ### Minimal example (aggregator only)
 
@@ -274,6 +275,15 @@ A parent that includes this under alias `db` addresses its resources as
 ---
 
 ### Field Reference
+
+#### `name` (string, optional)
+
+Overrides the project name. Defaults to the final segment of the spec path. Must be
+globally unique within the nexus instance.
+
+```yaml
+name: my-custom-name
+```
 
 #### `includes` (map)
 
