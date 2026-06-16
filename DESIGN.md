@@ -213,11 +213,14 @@ can be freely wiped and rebuilt.
 
 ## nexus.yaml Specification
 
-Every managed repo has a `nexus.yaml` at its root. The file declares no project name —
-naming always happens at the site where a project is added or nested. The schema is
-self-referential: a project's `projects:` field lists other projects, each described
-the same way. Each nested project is either **external** (has a `src:` pointing to
-another git repo) or **inline** (defined directly here, no `src:`).
+A `nexus.yaml` defines one project: its build, volumes, services, and nested projects.
+For external projects, nexus fetches the file from the git repo identified by the spec
+path — the file lives at the path within the repo that matches the spec path's subdirectory.
+Inline projects are defined directly inside their parent's `nexus.yaml` with no file of
+their own. Neither kind declares a project name — naming always happens at the site where
+a project is added or nested. The schema is self-referential: a project's `projects:`
+field lists other projects, each described the same way. Each nested project is either
+**external** (has a `src:`) or **inline** (no `src:`).
 
 ### Minimal example (external projects only)
 
