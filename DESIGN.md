@@ -18,7 +18,7 @@ Nexus runs entirely in user space. No root required.
 
 | Concept | Description |
 |---|---|
-| **Project** | The fundamental unit in nexus. Defined by a `nexus.yaml`: a name, an optional build step, volumes, services, and nested projects. Projects compose recursively — a project's `projects:` field lists other projects, each of which is the same type |
+| **Project** | The fundamental unit in nexus. Defined by a `nexus.yaml`: a name, an optional build step, volumes, services, and nested projects. Projects compose recursively — a project's `projects:` field lists other projects, each of which is the same type. A nested project is either **external** (has a `src:` pointing to another git repo) or **inline** (defined directly in the parent, no separate repo) |
 | **Deployment** | One running instance of a project at a specific commit SHA. One `nexus.yaml` = one deployment: build, volumes, and services all versioned and rolled out together |
 | **Service** | A named long-running process within a deployment. All services in a deployment share the same build and worktree |
 | **Volume** | A named directory outside all worktrees that persists across deployments |
@@ -27,7 +27,8 @@ Nexus runs entirely in user space. No root required.
 
 A deployment is the rollout unit: all its services are built, stopped, and started together.
 `depends_on` between services expresses startup ordering only — there is no restart propagation.
-Nested projects are fully independent; they watch their own refs and deploy on their own schedule.
+External nested projects are independent — they watch their own refs and deploy on their own schedule.
+Inline nested projects share the parent's worktree and are deployed together with it.
 
 ---
 
@@ -93,19 +94,24 @@ github.com/nexus-community/postgres
 github.com/myorg/monorepo/services/api
 ```
 
-Spec paths appear in `url:` fields inside `projects:` and in `--project` flags at install
+Spec paths appear in `src:` fields inside `projects:` and in `--project` flags at install
 time. Nexus resolves the actual transport (SSH, HTTPS, local) from the git CLI configuration,
 so no scheme is needed. Spec paths are only ever used for git operations — cloning, polling,
 worktree checkout. They play no role in identifying resources at runtime.
+
+Inline projects — `projects:` entries without a `src:` — have no spec path and no
+independent git identity. They are defined entirely within the parent `nexus.yaml`.
 
 ### Resource names
 
 Resource names identify everything within the nexus universe.
 
-**Project name**: defaults to the final path segment of the spec path, but can be
-overridden at the point of adding or including — never inside `nexus.yaml` itself.
-Keeping the name out of the file is what makes a `nexus.yaml` fully composable: the
-same file can be added as a root project under any name, or nested under any alias.
+**Project name**: for external projects, defaults to the final path segment of the spec
+path, but can be overridden at the point of adding or nesting — never inside `nexus.yaml`
+itself. Keeping the name out of the file is what makes a `nexus.yaml` fully composable:
+the same file can be added as a root project under any name, or nested under any alias.
+Inline projects have no global project name — they are only addressable through their
+parent.
 
 ```
 github.com/myorg/my-system           →  my-system      (default)
@@ -152,10 +158,11 @@ $NEXUS_HOME/                                         default: ~/.nexus
 │
 ├── nexus.db                                         sqlite: deployment state, service state
 │
-├── repos/                                           keyed by spec path (URL without scheme)
+├── repos/                                           keyed by spec path — external projects only
 │   │
 │   │   Bare clones live at the spec-path and are shared read-only git object stores.
 │   │   Worktrees live under the root deployment's spec-path, named by project alias.
+│   │   Inline projects have no entry here — they share the parent's worktree.
 │   │
 │   ├── github.com/nexus-community/postgres/
 │   │   └── .git/                                    bare clone (shared git objects)
@@ -209,35 +216,40 @@ can be freely wiped and rebuilt.
 Every managed repo has a `nexus.yaml` at its root. The file declares no project name —
 naming always happens at the site where a project is added or nested. The schema is
 self-referential: a project's `projects:` field lists other projects, each described
-the same way.
+the same way. Each nested project is either **external** (has a `src:` pointing to
+another git repo) or **inline** (defined directly here, no `src:`).
 
-### Minimal example (aggregator only)
+### Minimal example (external projects only)
 
 ```yaml
 # spec path: github.com/myorg/my-system
 # project name: my-system
 
 projects:
-  db:                                         # project alias — "db" becomes the address segment
-    url: github.com/nexus-community/postgres
+  db:                                         # external — src: points to another repo
+    src: github.com/nexus-community/postgres
     ref: "@v15"
   api:
-    url: github.com/myorg/api
+    src: github.com/myorg/api
     ref: "@main"
     bind:
       database: db/postgres                   # alias "database" → postgres service in db project
 ```
 
-### Full example (project with services)
+### Full example (external + inline projects)
 
 ```yaml
 # spec path: github.com/myorg/api
 # project name: api
 
 projects:
-  shared-lib:
-    url: github.com/myorg/shared-lib
+  shared-lib:                                 # external project
+    src: github.com/myorg/shared-lib
     ref: "@main"
+  metrics:                                    # inline project — no src:, lives in this worktree
+    services:
+      exporter:
+        run: ./scripts/metrics-exporter.sh
 
 # Runs once inside the new worktree before any services are started.
 # Non-zero exit aborts the deployment; currently running services are untouched.
@@ -290,9 +302,14 @@ A parent that nests this under alias `db` addresses its resources as
 Key: local alias for the nested project. Becomes the address segment for all resources
 within it. Must be unique within this `nexus.yaml` alongside all service and volume names.
 
+The presence or absence of `src:` determines the project type:
+
+**External project** — has `src:`. Points to another git repo, gets its own worktree,
+and is polled and deployed independently.
+
 | Field | Required | Description |
 |---|---|---|
-| `url` | yes | Spec path (no scheme). Nexus resolves the transport from git CLI config. Used only for git operations — plays no role in addressing |
+| `src` | yes | Spec path (no scheme). Nexus resolves the transport from git CLI config. Used only for git operations — plays no role in addressing |
 | `ref` | no | Ref to track, prefixed with `@`. Defaults to `@main`. See ref syntax below |
 | `bind` | no | Map of `alias: <target>` resolving dependency aliases. Resolution rules TBD — see Open Questions |
 
@@ -303,6 +320,11 @@ within it. Must be unique within this `nexus.yaml` alongside all service and vol
 | `@main` | Track the tip of branch `main`. Redeploys on every new commit |
 | `@v15` | Pin to tag `v15`. Redeploys only if the tag is moved (rare) |
 | `@latest` | Track the highest semver tag. Uses `git ls-remote --tags --sort=-version:refname`, takes the top result |
+
+**Inline project** — no `src:`. Defined directly in the parent `nexus.yaml`, shares the
+parent's worktree, and is deployed as part of the parent. Supports the same fields as a
+top-level project (`build:`, `volumes:`, `services:`, `projects:`), but has no independent
+git identity and no global project name.
 
 #### `volumes` (map)
 
@@ -385,8 +407,9 @@ git ls-remote --tags --sort=-version:refname origin 'refs/tags/*'
 
 When the resolved SHA differs from the last recorded SHA, a new deployment is enqueued.
 
-**Independent polling**: each deployment polls its own ref independently. A nested project
-is only redeployed when its own ref changes — not when its parent or a sibling redeploys.
+**Independent polling**: each external project polls its own ref independently and is only
+redeployed when its own ref changes. Inline projects have no ref and are always redeployed
+together with their parent.
 
 **Queuing rule**: at most one pending SHA per deployment is held. If a new commit arrives
 while a build is in progress, it replaces the queued SHA. Nexus always converges to the
@@ -398,10 +421,11 @@ latest commit without processing every intermediate one.
 1. DETECT
    └── New SHA queued for deployment
 
-2. CHECKOUT
+2. CHECKOUT  (external projects only)
    └── git worktree add <worktree-path> <sha>
        (objects read from the spec-path bare clone;
-        worktree placed under the root deployment's repo dir, named by project alias)
+        worktree placed under the root deployment's repo dir, named by project alias;
+        inline projects skip this step — they use the parent's worktree)
 
 3. BUILD  (inside the new worktree)
    ├── sh -c "<build command>"   (skipped if build is not declared)
@@ -478,7 +502,7 @@ Nexus manages itself by nesting its own repo:
 ```yaml
 projects:
   nexus:
-    url: github.com/rdkal/nexus
+    src: github.com/rdkal/nexus
     ref: "@main"
 ```
 
@@ -554,9 +578,9 @@ POST /api/<project-name>/services/<name>/restart
 
 **In scope:**
 - Install script (`curl … | sh`) with multiple `--project` flags
-- `nexus.yaml` with `projects`, `build`, `volumes`, `services`, `depends_on`, `bind`
+- `nexus.yaml` with `projects` (external and inline), `build`, `volumes`, `services`, `depends_on`, `bind`
 - Project-name-based resource addressing; volumes and logs namespaced by resource address
-- Bare clones at spec-path, worktrees per deployment instance named by project alias
+- Bare clones at spec-path, worktrees per external project instance named by project alias
 - Git polling via `git ls-remote` (30s), worktree-based deployments
 - Build → SIGTERM old → start new lifecycle with rollback
 - Dependency-ordered startup and shutdown (no restart propagation)
