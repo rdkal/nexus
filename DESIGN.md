@@ -23,10 +23,9 @@ Nexus runs entirely in user space. No root required.
 | **Service** | A named long-running process within a deployment. All services in a deployment share the same build and worktree |
 | **Volume** | A named directory outside all worktrees that persists across deployments |
 | **Worktree** | An isolated checkout of a repo at a specific commit SHA. One active worktree per deployment |
-| **Bind** | A wiring declaration in a `projects:` entry that resolves a service's abstract dependency alias to a concrete resource in the tree |
 
 A deployment is the rollout unit: all its services are built, stopped, and started together.
-`depends_on` between services expresses startup ordering only — there is no restart propagation.
+Services that depend on each other are expected to retry on their own — no startup ordering.
 External nested projects are independent — they watch their own refs and deploy on their own schedule.
 Inline nested projects share the parent's worktree and are deployed together with it.
 
@@ -235,8 +234,6 @@ projects:
   api:
     src: github.com/myorg/api
     ref: "@main"
-    bind:
-      database: db/postgres                   # alias "database" → postgres service in db project
 ```
 
 ### Full example (external + inline projects)
@@ -267,14 +264,9 @@ volumes:
 services:
   api-server:
     run: uvicorn app:main --host 0.0.0.0 --port 8080
-    depends_on:
-      - database        # abstract alias — resolved by bind: at the projects: entry
-      - api-worker      # short name — sibling service in this project
 
   api-worker:
     run: celery -A app.tasks worker --concurrency 4
-    depends_on:
-      - database
 ```
 
 ### Community/reusable example
@@ -314,7 +306,6 @@ and is polled and deployed independently.
 |---|---|---|
 | `src` | yes | Spec path (no scheme). Nexus resolves the transport from git CLI config. Used only for git operations — plays no role in addressing |
 | `ref` | no | Ref to track, prefixed with `@`. Defaults to `@main`. See ref syntax below |
-| `bind` | no | Map of `alias: <target>` resolving dependency aliases. Resolution rules TBD — see Open Questions |
 
 **Ref syntax:**
 
@@ -341,8 +332,7 @@ Key: service name. Unique within this deployment alongside volume names and proj
 
 | Field | Required | Description |
 |---|---|---|
-| `run` | yes | Shell command. Spawned with `sh -c` from the worktree root |
-| `depends_on` | no | List of names this service needs before it starts. Bare name = sibling; other forms TBD |
+| `run` | yes | Shell command. Spawned with `sh -c`. Working directory is the directory containing the `nexus.yaml` (equals worktree root for single-repo projects; may be a subdirectory for monorepos) |
 
 ---
 
@@ -354,26 +344,6 @@ Key: service name. Unique within this deployment alongside volume names and proj
   the same `nexus.yaml`. A service and a volume may not share a name; nor may a service and
   a project alias.
 - No reserved words. Without type segments in addresses there is no ambiguity to guard against.
-
----
-
-## Dependency Resolution
-
-`depends_on` and `bind:` express service dependencies. Full resolution rules are TBD
-(see Open Questions). The established semantics:
-
-- **Short name** (no slash): sibling service in the same deployment. Always unambiguous.
-- **Cross-project**: use a `bind:` alias in the `projects:` entry. The parent maps an abstract
-  alias to a concrete resource; the nested service uses the bare alias as a short name in
-  `depends_on`.
-- Full address forms and `bind:` path syntax are TBD.
-
-### What `depends_on` does
-
-- **Startup ordering**: dependency services start before this service
-- **Shutdown ordering**: dependency services stop after this service (reverse of startup order)
-- **Nothing else**: if a dependency crashes or redeploys, dependent services are not touched.
-  Services are expected to handle reconnection on their own.
 
 ---
 
@@ -441,13 +411,13 @@ latest commit without processing every intermediate one.
          alert shown in UI
 
 4. SWAP
-   ├── 4a. SHUTDOWN current services (in reverse dependency order)
+   ├── 4a. SHUTDOWN current services
    │       SIGTERM to each supervised service
    │       Wait (daemon-wide grace period, default 30s)
    │       SIGKILL anything still alive
    │
-   └── 4b. STARTUP new services (in dependency order)
-           Spawn each service's `run` from the new worktree
+   └── 4b. STARTUP new services
+           Spawn each service's `run` from the nexus.yaml directory
            Register PIDs with the supervisor
 
 5. VERIFY  (5-second window)
@@ -581,12 +551,11 @@ POST /api/<project-name>/services/<name>/restart
 
 **In scope:**
 - Install script (`curl … | sh`) with multiple `--project` flags
-- `nexus.yaml` with `projects` (external and inline), `build`, `volumes`, `services`, `depends_on`, `bind`
+- `nexus.yaml` with `projects` (external and inline), `build`, `volumes`, `services`
 - Project-name-based resource addressing; volumes and logs namespaced by resource address
 - Bare clones at spec-path, worktrees per external project instance named by project alias
 - Git polling via `git ls-remote` (30s), worktree-based deployments
 - Build → SIGTERM old → start new lifecycle with rollback
-- Dependency-ordered startup and shutdown (no restart propagation)
 - Commit queuing (latest-wins, depth 1)
 - Process supervision with restart backoff and degraded state
 - Daemon-wide 30s shutdown grace period
@@ -608,15 +577,13 @@ POST /api/<project-name>/services/<name>/restart
 
 ## Open Questions
 
-1. **`depends_on` and `bind:` resolution**: full rules for how `depends_on` entries resolve
-   across project boundaries and what path syntax `bind:` values use are TBD. The short-name
-   form (sibling service, no slash) and the alias-via-bind mechanism are established;
-   everything else is deferred.
+1. **`depends_on` / startup ordering**: not in v1. Services crash-loop until their
+   dependencies are available — the process supervisor's exponential backoff handles this.
+   Explicit ordering and `bind:` wiring can be added later without breaking existing configs.
 
-2. **Cross-deployment volume paths**: a service in one deployment sometimes needs the volume
-   path of another (e.g. api needs postgres's socket path). Extending `bind:` to wire volume
-   paths would solve this: `bind: { db-data: db/data }` → injects `$NEXUS_BIND_DB_DATA=<path>`.
-   Deferred to v2; v1 services coordinate via well-known host paths or out-of-band env vars.
+2. **Cross-deployment volume paths**: a service sometimes needs the volume path of another
+   project (e.g. api needs postgres's socket path). V1 services coordinate via well-known
+   host paths or out-of-band env vars. A future `bind:` mechanism could inject these paths.
 
 3. **`@latest` tie-breaking**: non-semver tag names that sort equally under `version:refname`
    fall back to tag creation date. Decided — no further action needed.
