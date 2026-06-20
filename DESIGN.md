@@ -486,6 +486,8 @@ build: ./scripts/build.sh   # compiles new binary to $NEXUS_HOME/bin/nexus.next,
 services:
   nexus-daemon:
     run: $NEXUS_HOME/bin/nexus daemon
+  nexus-ui:
+    run: python -m nexus.ui --socket $NEXUS_HOME/nexus.sock --port 7777
 ```
 
 When a new nexus commit lands:
@@ -497,11 +499,12 @@ When a new nexus commit lands:
 3. The OS init system sees the process exit and restarts `nexus-launcher`, which
    exec's `$NEXUS_HOME/bin/nexus` — now the new binary.
 4. **STARTUP**: new nexus reads `nexus.db`, reconstructs the full service tree, and
-   resumes supervision of all other services.
+   resumes supervision of all other services — including `nexus-ui`, which it starts normally.
 
 Nexus does **not** try to spawn `nexus-daemon` as a child process. The OS service unit
 owns the restart. Nexus recognises it is managing itself and skips the STARTUP step for
-`nexus-daemon`, leaving that entirely to the init system.
+`nexus-daemon` only, leaving that entirely to the init system. All other services
+(including `nexus-ui`) are started as usual.
 
 **Key invariant**: all state lives in `nexus.db` and the filesystem. The new process
 reconstructs everything from disk with no handshake with the old one. Other services
@@ -511,10 +514,13 @@ keep running through the brief daemon restart.
 
 ## Web UI
 
-Nexus serves a minimal HTTP UI on a configurable port (default `7777`).
-HTTP only, no authentication — intended for private network use.
+The web UI is a Python ([iris](https://rdkal.github.io/iris)) process that runs as a
+nexus-managed service. It connects to the daemon's Unix socket and serves the public
+HTTP interface on port 7777. HTTP only, no authentication — intended for private network use.
 
-The UI URL scheme mirrors the resource name tree.
+The daemon never binds a public port. The Python process is the sole HTTP interface.
+
+The URL scheme mirrors the resource name tree.
 
 ### Pages
 
@@ -536,6 +542,8 @@ Examples:
 
 ### API
 
+Served by the Python process, backed by the daemon socket:
+
 ```
 GET  /api/<project-name>
 GET  /api/<project-name>/history
@@ -544,6 +552,97 @@ GET  /api/<project-name>/services
 GET  /api/<project-name>/services/<name>
 POST /api/<project-name>/services/<name>/restart
 ```
+
+---
+
+## Implementation
+
+### Daemon (Go)
+
+The nexus daemon is written in Go. It owns:
+
+- Process supervision and restart backoff
+- Git polling via `git ls-remote`
+- Deployment lifecycle (detect, checkout, build, swap, verify, rollback)
+- State persistence in SQLite (`nexus.db`)
+- Unix socket at `$NEXUS_HOME/nexus.sock`
+
+The daemon never binds a public network port. All external access goes through
+the Python web UI.
+
+### Web UI (Python)
+
+The web UI is written in Python using [iris](https://rdkal.github.io/iris). It is
+defined as a service inside nexus's own `nexus.yaml` and supervised by the daemon
+like any other process. It connects to `$NEXUS_HOME/nexus.sock` using standard HTTP
+over a Unix socket transport and serves the public interface on port 7777.
+
+### Daemon socket
+
+The daemon exposes an HTTP API over the Unix socket. The Python UI is the only client:
+
+```
+GET  /projects
+GET  /projects/<address>
+GET  /projects/<address>/history
+POST /projects/<address>/redeploy
+GET  /projects/<address>/services
+GET  /projects/<address>/services/<name>/log
+POST /projects/<address>/services/<name>/restart
+```
+
+This is an internal interface — its shape can change freely without affecting users.
+
+---
+
+## Testing
+
+### Go tests
+
+Go's `testing` package covers all daemon behavior in isolation. Tests run with
+`go test ./...` and require no external processes other than `git` itself.
+
+What is covered:
+
+- Ref parsing: `@main`, `@v15`, `@latest` from `git ls-remote` output
+- SHA comparison and queuing (latest-wins, at-most-one-pending)
+- Deployment lifecycle state machine transitions
+- Process supervision: restart backoff timing, degraded state detection
+- Socket handler correctness
+- Volume and log path derivation from resource addresses
+- Project tree loading (external, inline, nested)
+
+Git operations are tested against local bare repos created in `t.TempDir()` — no
+network access required.
+
+### pytest e2e tests
+
+pytest covers the full system end-to-end: a real daemon binary managing real git
+repos and real processes. Tests live in `tests/` at the repo root.
+
+Setup per test session:
+
+- Temporary `NEXUS_HOME` directory
+- Local bare git repos (`file:///...`) standing in for remote repos
+- Daemon started as a subprocess; tests communicate via the Unix socket
+- Git commits pushed via `git` CLI; assertions made against daemon socket responses
+  and the filesystem (worktrees, volumes, logs)
+
+```python
+def test_service_starts_after_commit(nexus, repo):
+    repo.commit("nexus.yaml", minimal_project("server", run="python -m http.server"))
+    nexus.add_project(repo.url)
+    assert nexus.wait_for_service("server", state="running", timeout=10)
+
+def test_service_restarts_on_crash(nexus, repo):
+    repo.commit("nexus.yaml", minimal_project("crasher", run="exit 1"))
+    nexus.add_project(repo.url)
+    status = nexus.wait_for_service("crasher", state="degraded", timeout=30)
+    assert status["restart_count"] >= 5
+```
+
+e2e tests require the compiled daemon binary, Python, and git available in `PATH`.
+They are slower and intended to run in CI rather than on every save.
 
 ---
 
@@ -561,8 +660,9 @@ POST /api/<project-name>/services/<name>/restart
 - Daemon-wide 30s shutdown grace period
 - Self-update via thin launcher
 - `NEXUS_HOME` configuration
-- Web UI (read-only + manual redeploy trigger)
-- REST API
+- Go daemon with Unix socket internal API
+- Python/iris web UI as a supervised nexus service (port 7777)
+- REST API served by the Python process
 
 **Explicitly deferred:**
 - Flows / pipelines
