@@ -5,23 +5,23 @@
 | **Foundation** |
 | Install script (`curl \| sh`, sets up NEXUS_HOME, registers user service) | ✅ | | |
 | `nexus-launcher` thin binary (immutable, exec's daemon) | ✅ | | |
-| NEXUS_HOME directory structure creation | ✅ | | |
+| NEXUS_HOME directory structure creation | ✅ | ✅ | ✅ |
 | systemd user service registration (Linux) | ✅ | | |
 | launchctl plist registration (macOS) | ✅ | | |
 | **Configuration** |
-| `nexus.yaml` parser (external projects, inline projects, recursive `projects:`) | ✅ | | |
-| Project name inference from spec path (final segment default) | ✅ | | |
-| Custom project name via `spec-path:name` syntax | ✅ | | |
-| `nexus project add <spec-path[:name]>` CLI command | ✅ | | |
-| `nexus project remove <name>` CLI command | ✅ | | |
+| `nexus.yaml` parser (external projects, inline projects, recursive `projects:`) | ✅ | ✅ | ✅ |
+| Project name inference from spec path (final segment default) | ✅ | ✅ | ✅ |
+| Custom project name via `spec-path:name` syntax | ✅ | ✅ | ✅ |
+| `nexus project add <spec-path[:name]>` CLI command | ✅ | ✅ | |
+| `nexus project remove <name>` CLI command | ✅ | ✅ | |
 | **Git layer** |
-| Bare clone at spec path under `repos/` | ✅ | | |
-| Git transport resolution from git CLI config (SSH/HTTPS/local) | ✅ | | |
-| 30-second polling loop via `git ls-remote` | ✅ | | |
-| `@<branch>` ref resolution (branch tip SHA) | ✅ | | |
-| `@<tag>` ref resolution (exact tag SHA) | ✅ | | |
-| `@latest` semver tag resolution (`--sort=-version:refname`) | ✅ | | |
-| Commit queuing (latest-wins, one pending SHA per deployment) | ✅ | | |
+| Bare clone at spec path under `repos/` | ✅ | ✅ | ✅ |
+| Git transport resolution from git CLI config (SSH/HTTPS/local) | ✅ | ✅ | ✅ |
+| 30-second polling loop via `git ls-remote` | ✅ | ✅ | ✅ |
+| `@<branch>` ref resolution (branch tip SHA) | ✅ | ✅ | ✅ |
+| `@<tag>` ref resolution (exact tag SHA) | ✅ | ✅ | ✅ |
+| `@latest` semver tag resolution (`--sort=-version:refname`) | ✅ | ✅ | ✅ |
+| Commit queuing (latest-wins, one pending SHA per deployment) | ✅ | ✅ | ✅ |
 | **Deployment lifecycle** |
 | CHECKOUT: `git worktree add` at project alias path under root spec-path | ✅ | | |
 | BUILD: `sh -c` in nexus.yaml directory, log to `logs/<address>/<sha>-build.log` | ✅ | | |
@@ -42,7 +42,7 @@
 | **Volumes** |
 | Volume directory creation at `volumes/<address>/` on first use | ✅ | | |
 | **State persistence** |
-| `nexus.db` SQLite schema (projects, deployments, service state) | | | |
+| `nexus.db` SQLite schema (projects, deployments, service state) | ✅ | ✅ | ✅ |
 | Full state recovery from `nexus.db` on daemon restart | ✅ | | |
 | **Daemon socket** |
 | Unix socket server at `$NEXUS_HOME/nexus.sock` | ✅ | | |
@@ -64,13 +64,13 @@
 | Live log tail | ✅ | | |
 | Public REST API (proxied from daemon socket) | ✅ | | |
 | **Go unit tests** |
-| Ref parsing (`@branch`, `@tag`, `@latest`) from `git ls-remote` output | ✅ | | |
-| Commit queuing logic (latest-wins, replace pending) | ✅ | | |
+| Ref parsing (`@branch`, `@tag`, `@latest`) from `git ls-remote` output | ✅ | ✅ | ✅ |
+| Commit queuing logic (latest-wins, replace pending) | ✅ | ✅ | ✅ |
 | Deployment lifecycle state machine transitions | ✅ | | |
 | Process supervision: backoff timing, degraded detection | ✅ | | |
 | Socket API handlers | ✅ | | |
-| Volume and log path derivation from resource addresses | ✅ | | |
-| Project tree loading: external, inline, nested | ✅ | | |
+| Volume and log path derivation from resource addresses | ✅ | ✅ | ✅ |
+| Project tree loading: external, inline, nested | ✅ | ✅ | ✅ |
 | **pytest e2e tests** |
 | Test fixtures: daemon subprocess, local bare git repos, socket client | ✅ | | |
 | Service starts after first commit | ✅ | | |
