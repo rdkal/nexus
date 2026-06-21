@@ -5,15 +5,15 @@
 | **Foundation** |
 | Install script (`curl \| sh`, sets up NEXUS_HOME, registers user service) | ✅ | | |
 | `nexus-launcher` thin binary (immutable, exec's daemon) | ✅ | | |
-| NEXUS_HOME directory structure creation | ✅ | | |
+| NEXUS_HOME directory structure creation | ✅ | ✅ | ✅ |
 | systemd user service registration (Linux) | ✅ | | |
 | launchctl plist registration (macOS) | ✅ | | |
 | **Configuration** |
-| `nexus.yaml` parser (external projects, inline projects, recursive `projects:`) | ✅ | | |
-| Project name inference from spec path (final segment default) | ✅ | | |
-| Custom project name via `spec-path:name` syntax | ✅ | | |
-| `nexus project add <spec-path[:name]>` CLI command | ✅ | | |
-| `nexus project remove <name>` CLI command | ✅ | | |
+| `nexus.yaml` parser (external projects, inline projects, recursive `projects:`) | ✅ | ✅ | ✅ |
+| Project name inference from spec path (final segment default) | ✅ | ✅ | ✅ |
+| Custom project name via `spec-path:name` syntax | ✅ | ✅ | ✅ |
+| `nexus project add <spec-path[:name]>` CLI command | ✅ | ✅ | |
+| `nexus project remove <name>` CLI command | ✅ | ✅ | |
 | **Git layer** |
 | Bare clone at spec path under `repos/` | ✅ | | |
 | Git transport resolution from git CLI config (SSH/HTTPS/local) | ✅ | | |
@@ -42,7 +42,7 @@
 | **Volumes** |
 | Volume directory creation at `volumes/<address>/` on first use | ✅ | | |
 | **State persistence** |
-| `nexus.db` SQLite schema (projects, deployments, service state) | | | |
+| `nexus.db` SQLite schema (projects, deployments, service state) | ✅ | ✅ | ✅ |
 | Full state recovery from `nexus.db` on daemon restart | ✅ | | |
 | **Daemon socket** |
 | Unix socket server at `$NEXUS_HOME/nexus.sock` | ✅ | | |
@@ -69,8 +69,8 @@
 | Deployment lifecycle state machine transitions | ✅ | | |
 | Process supervision: backoff timing, degraded detection | ✅ | | |
 | Socket API handlers | ✅ | | |
-| Volume and log path derivation from resource addresses | ✅ | | |
-| Project tree loading: external, inline, nested | ✅ | | |
+| Volume and log path derivation from resource addresses | ✅ | ✅ | ✅ |
+| Project tree loading: external, inline, nested | ✅ | ✅ | ✅ |
 | **pytest e2e tests** |
 | Test fixtures: daemon subprocess, local bare git repos, socket client | ✅ | | |
 | Service starts after first commit | ✅ | | |
