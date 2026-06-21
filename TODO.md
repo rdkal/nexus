@@ -33,12 +33,12 @@
 | CLEANUP: `git worktree remove` old worktree | ✅ | | |
 | ROLLBACK: restart previous worktree's services on VERIFY failure | ✅ | | |
 | **Process supervision** |
-| Service spawning with `sh -c`, working dir = nexus.yaml directory | ✅ | | |
-| Environment injection (`NEXUS_PROJECT`, `NEXUS_SHA`, `NEXUS_REF`, `NEXUS_WORKTREE`) | ✅ | | |
-| `NEXUS_VOLUME_<NAME>` env injection per declared volume | ✅ | | |
-| Restart on unexpected exit with exponential backoff (1s → 2s → 4s … cap 60s) | ✅ | | |
-| Degraded state: >5 crashes in 60s → stop restarting, alert | ✅ | | |
-| Service log capture to `logs/<address>/<service>/current.log` | ✅ | | |
+| Service spawning with `sh -c`, working dir = nexus.yaml directory | ✅ | ✅ | ✅ |
+| Environment injection (`NEXUS_PROJECT`, `NEXUS_SHA`, `NEXUS_REF`, `NEXUS_WORKTREE`) | ✅ | ✅ | |
+| `NEXUS_VOLUME_<NAME>` env injection per declared volume | ✅ | ✅ | |
+| Restart on unexpected exit with exponential backoff (1s → 2s → 4s … cap 60s) | ✅ | ✅ | ✅ |
+| Degraded state: >5 crashes in 60s → stop restarting, alert | ✅ | ✅ | ✅ |
+| Service log capture to `logs/<address>/<service>/current.log` | ✅ | ✅ | ✅ |
 | **Volumes** |
 | Volume directory creation at `volumes/<address>/` on first use | ✅ | | |
 | **State persistence** |
@@ -67,7 +67,7 @@
 | Ref parsing (`@branch`, `@tag`, `@latest`) from `git ls-remote` output | ✅ | ✅ | ✅ |
 | Commit queuing logic (latest-wins, replace pending) | ✅ | ✅ | ✅ |
 | Deployment lifecycle state machine transitions | ✅ | | |
-| Process supervision: backoff timing, degraded detection | ✅ | | |
+| Process supervision: backoff timing, degraded detection | ✅ | ✅ | ✅ |
 | Socket API handlers | ✅ | | |
 | Volume and log path derivation from resource addresses | ✅ | ✅ | ✅ |
 | Project tree loading: external, inline, nested | ✅ | ✅ | ✅ |
