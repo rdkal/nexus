@@ -15,13 +15,13 @@
 | `nexus project add <spec-path[:name]>` CLI command | ✅ | ✅ | |
 | `nexus project remove <name>` CLI command | ✅ | ✅ | |
 | **Git layer** |
-| Bare clone at spec path under `repos/` | ✅ | | |
-| Git transport resolution from git CLI config (SSH/HTTPS/local) | ✅ | | |
-| 30-second polling loop via `git ls-remote` | ✅ | | |
-| `@<branch>` ref resolution (branch tip SHA) | ✅ | | |
-| `@<tag>` ref resolution (exact tag SHA) | ✅ | | |
-| `@latest` semver tag resolution (`--sort=-version:refname`) | ✅ | | |
-| Commit queuing (latest-wins, one pending SHA per deployment) | ✅ | | |
+| Bare clone at spec path under `repos/` | ✅ | ✅ | ✅ |
+| Git transport resolution from git CLI config (SSH/HTTPS/local) | ✅ | ✅ | ✅ |
+| 30-second polling loop via `git ls-remote` | ✅ | ✅ | ✅ |
+| `@<branch>` ref resolution (branch tip SHA) | ✅ | ✅ | ✅ |
+| `@<tag>` ref resolution (exact tag SHA) | ✅ | ✅ | ✅ |
+| `@latest` semver tag resolution (`--sort=-version:refname`) | ✅ | ✅ | ✅ |
+| Commit queuing (latest-wins, one pending SHA per deployment) | ✅ | ✅ | ✅ |
 | **Deployment lifecycle** |
 | CHECKOUT: `git worktree add` at project alias path under root spec-path | ✅ | | |
 | BUILD: `sh -c` in nexus.yaml directory, log to `logs/<address>/<sha>-build.log` | ✅ | | |
@@ -64,8 +64,8 @@
 | Live log tail | ✅ | | |
 | Public REST API (proxied from daemon socket) | ✅ | | |
 | **Go unit tests** |
-| Ref parsing (`@branch`, `@tag`, `@latest`) from `git ls-remote` output | ✅ | | |
-| Commit queuing logic (latest-wins, replace pending) | ✅ | | |
+| Ref parsing (`@branch`, `@tag`, `@latest`) from `git ls-remote` output | ✅ | ✅ | ✅ |
+| Commit queuing logic (latest-wins, replace pending) | ✅ | ✅ | ✅ |
 | Deployment lifecycle state machine transitions | ✅ | | |
 | Process supervision: backoff timing, degraded detection | ✅ | | |
 | Socket API handlers | ✅ | | |
