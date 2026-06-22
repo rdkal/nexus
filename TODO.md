@@ -43,16 +43,16 @@
 | Volume directory creation at `volumes/<address>/` on first use | ✅ | | |
 | **State persistence** |
 | `nexus.db` SQLite schema (projects, deployments, service state) | ✅ | ✅ | ✅ |
-| Full state recovery from `nexus.db` on daemon restart | ✅ | | |
+| Full state recovery from `nexus.db` on daemon restart | ✅ | ✅ | |
 | **Daemon socket** |
-| Unix socket server at `$NEXUS_HOME/nexus.sock` | ✅ | | |
-| `GET /projects` — list all projects and health summary | ✅ | | |
-| `GET /projects/<address>` — deployment detail and current SHA | ✅ | | |
-| `GET /projects/<address>/history` — deployment history | ✅ | | |
-| `POST /projects/<address>/redeploy` — re-run build + restart at current SHA | ✅ | | |
-| `GET /projects/<address>/services` — list services and status | ✅ | | |
-| `GET /projects/<address>/services/<name>/log` — stream service log | ✅ | | |
-| `POST /projects/<address>/services/<name>/restart` — manual restart | ✅ | | |
+| Unix socket server at `$NEXUS_HOME/nexus.sock` | ✅ | ✅ | ✅ |
+| `GET /projects` — list all projects and health summary | ✅ | ✅ | ✅ |
+| `GET /projects/<address>` — deployment detail and current SHA | ✅ | ✅ | ✅ |
+| `GET /projects/<address>/history` — deployment history | ✅ | ✅ | ✅ |
+| `POST /projects/<address>/redeploy` — re-run build + restart at current SHA | ✅ | ✅ | ✅ |
+| `GET /projects/<address>/services` — list services and status | ✅ | ✅ | ✅ |
+| `GET /projects/<address>/services/<name>/log` — stream service log | ✅ | ✅ | |
+| `POST /projects/<address>/services/<name>/restart` — manual restart | ✅ | ✅ | ✅ |
 | **Self-update** |
 | Build script: compile Go binary, atomic swap to `nexus.next` → `nexus` | ✅ | | |
 | Skip STARTUP for `nexus-daemon` only; start all other services normally | ✅ | | |
@@ -68,7 +68,7 @@
 | Commit queuing logic (latest-wins, replace pending) | ✅ | ✅ | ✅ |
 | Deployment lifecycle state machine transitions | ✅ | ✅ | ✅ |
 | Process supervision: backoff timing, degraded detection | ✅ | ✅ | ✅ |
-| Socket API handlers | ✅ | | |
+| Socket API handlers | ✅ | ✅ | ✅ |
 | Volume and log path derivation from resource addresses | ✅ | ✅ | ✅ |
 | Project tree loading: external, inline, nested | ✅ | ✅ | ✅ |
 | **pytest e2e tests** |
