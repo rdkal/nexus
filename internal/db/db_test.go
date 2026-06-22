@@ -3,6 +3,7 @@ package db_test
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/rdkal/nexus/internal/db"
 )
@@ -113,5 +114,33 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 	}
 	if len(list) != 1 || list[0].Name != "api" {
 		t.Errorf("expected project 'api' to persist, got %v", list)
+	}
+}
+
+func TestAddAndFinishDeployment(t *testing.T) {
+	d := openDB(t)
+
+	id, err := d.AddDeployment("my-system", "abc123", time.Now())
+	if err != nil {
+		t.Fatalf("AddDeployment: %v", err)
+	}
+	if id <= 0 {
+		t.Errorf("expected positive id, got %d", id)
+	}
+
+	if err := d.FinishDeployment(id, "active", time.Now()); err != nil {
+		t.Fatalf("FinishDeployment: %v", err)
+	}
+
+	// A second deployment for same address can be added independently.
+	id2, err := d.AddDeployment("my-system", "def456", time.Now())
+	if err != nil {
+		t.Fatalf("second AddDeployment: %v", err)
+	}
+	if id2 <= id {
+		t.Errorf("expected auto-increment id > %d, got %d", id, id2)
+	}
+	if err := d.FinishDeployment(id2, "rolled_back", time.Now()); err != nil {
+		t.Fatalf("FinishDeployment rolled_back: %v", err)
 	}
 }
