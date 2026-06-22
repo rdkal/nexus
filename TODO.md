@@ -4,10 +4,13 @@
 |------|:--------:|:-----------:|:------:|
 | **Foundation** |
 | Install script (`curl \| sh`, sets up NEXUS_HOME, registers user service) | ✅ | | |
-| `nexus-launcher` thin binary (immutable, exec's daemon) | ✅ | | |
+| `nexus-pm` process manager binary (`cmd/nexus-pm`) | ✅ | ✅ | |
+| `nexus-pm.sock` HTTP API: spawn / stop / status / runtime-restart | ✅ | ✅ | |
+| `RemoteSupervisor` client in nexus runtime (talks to nexus-pm.sock) | ✅ | ✅ | |
+| `PMSocket` path added to `home.Paths` | ✅ | ✅ | ✅ |
 | NEXUS_HOME directory structure creation | ✅ | ✅ | ✅ |
-| systemd user service registration (Linux) | ✅ | | |
-| launchctl plist registration (macOS) | ✅ | | |
+| systemd user service registration (Linux) — points to `nexus-pm` | ✅ | | |
+| launchctl plist registration (macOS) — points to `nexus-pm` | ✅ | | |
 | **Configuration** |
 | `nexus.yaml` parser (external projects, inline projects, recursive `projects:`) | ✅ | ✅ | ✅ |
 | Project name inference from spec path (final segment default) | ✅ | ✅ | ✅ |
@@ -54,8 +57,8 @@
 | `GET /projects/<address>/services/<name>/log` — stream service log | ✅ | ✅ | |
 | `POST /projects/<address>/services/<name>/restart` — manual restart | ✅ | ✅ | ✅ |
 | **Self-update** |
-| Build script: compile Go binary, atomic swap to `nexus.next` → `nexus` | ✅ | | |
-| Skip STARTUP for `nexus-daemon` only; start all other services normally | ✅ | | |
+| Build script: compile Go binary, atomic swap to `$NEXUS_HOME/bin/nexus` | ✅ | | |
+| After self-build deploy, call `POST /runtime/restart` on nexus-pm.sock | ✅ | | |
 | **Web UI (Python / iris)** |
 | Unix socket HTTP client transport | ✅ | | |
 | Project tree page (`/`) | ✅ | | |

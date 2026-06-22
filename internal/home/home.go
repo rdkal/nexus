@@ -32,25 +32,27 @@ func Setup(dir string) error {
 
 // Paths holds the well-known paths within a NEXUS_HOME directory.
 type Paths struct {
-	Home    string
-	Bin     string
-	Repos   string
-	Volumes string
-	Logs    string
-	DB      string
-	Socket  string
+	Home     string
+	Bin      string
+	Repos    string
+	Volumes  string
+	Logs     string
+	DB       string
+	Socket   string // nexus runtime API socket (nexus.sock)
+	PMSocket string // nexus-pm process manager API socket (nexus-pm.sock)
 }
 
 // NewPaths constructs Paths rooted at the given NEXUS_HOME directory.
 func NewPaths(home string) Paths {
 	return Paths{
-		Home:    home,
-		Bin:     filepath.Join(home, "bin"),
-		Repos:   filepath.Join(home, "repos"),
-		Volumes: filepath.Join(home, "volumes"),
-		Logs:    filepath.Join(home, "logs"),
-		DB:      filepath.Join(home, "nexus.db"),
-		Socket:  filepath.Join(home, "nexus.sock"),
+		Home:     home,
+		Bin:      filepath.Join(home, "bin"),
+		Repos:    filepath.Join(home, "repos"),
+		Volumes:  filepath.Join(home, "volumes"),
+		Logs:     filepath.Join(home, "logs"),
+		DB:       filepath.Join(home, "nexus.db"),
+		Socket:   filepath.Join(home, "nexus.sock"),
+		PMSocket: filepath.Join(home, "nexus-pm.sock"),
 	}
 }
 

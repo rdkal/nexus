@@ -57,7 +57,7 @@ func daemonCmd(homeFlag *string) *cobra.Command {
 
 			fmt.Fprintf(os.Stderr, "nexus daemon starting (home=%s)\n", homeDir)
 
-			sup := &supervisor.Supervisor{} // defaults to OSRunner
+			sup := supervisor.NewRemoteSupervisor(paths.PMSocket)
 			d := daemon.New(database, sup, paths)
 
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
