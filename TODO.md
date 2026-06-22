@@ -23,15 +23,15 @@
 | `@latest` semver tag resolution (`--sort=-version:refname`) | ✅ | ✅ | ✅ |
 | Commit queuing (latest-wins, one pending SHA per deployment) | ✅ | ✅ | ✅ |
 | **Deployment lifecycle** |
-| CHECKOUT: `git worktree add` at project alias path under root spec-path | ✅ | | |
-| BUILD: `sh -c` in nexus.yaml directory, log to `logs/<address>/<sha>-build.log` | ✅ | | |
-| Failed build: remove worktree, mark SHA failed, keep current services | ✅ | | |
-| SHUTDOWN: SIGTERM all services, 30s grace, SIGKILL survivors | ✅ | | |
-| STARTUP: spawn services from new worktree | ✅ | | |
-| VERIFY: 5-second window, any exit triggers rollback | ✅ | | |
-| PROMOTE: record new SHA as active in `nexus.db` | ✅ | | |
-| CLEANUP: `git worktree remove` old worktree | ✅ | | |
-| ROLLBACK: restart previous worktree's services on VERIFY failure | ✅ | | |
+| CHECKOUT: `git worktree add` at project alias path under root spec-path | ✅ | ✅ | ✅ |
+| BUILD: `sh -c` in nexus.yaml directory, log to `logs/<address>/<sha>-build.log` | ✅ | ✅ | ✅ |
+| Failed build: remove worktree, mark SHA failed, keep current services | ✅ | ✅ | ✅ |
+| SHUTDOWN: SIGTERM all services, 30s grace, SIGKILL survivors | ✅ | ✅ | ✅ |
+| STARTUP: spawn services from new worktree | ✅ | ✅ | ✅ |
+| VERIFY: 5-second window, any exit triggers rollback | ✅ | ✅ | ✅ |
+| PROMOTE: record new SHA as active in `nexus.db` | ✅ | ✅ | ✅ |
+| CLEANUP: `git worktree remove` old worktree | ✅ | ✅ | ✅ |
+| ROLLBACK: restart previous worktree's services on VERIFY failure | ✅ | ✅ | ✅ |
 | **Process supervision** |
 | Service spawning with `sh -c`, working dir = nexus.yaml directory | ✅ | ✅ | ✅ |
 | Environment injection (`NEXUS_PROJECT`, `NEXUS_SHA`, `NEXUS_REF`, `NEXUS_WORKTREE`) | ✅ | ✅ | |
@@ -66,7 +66,7 @@
 | **Go unit tests** |
 | Ref parsing (`@branch`, `@tag`, `@latest`) from `git ls-remote` output | ✅ | ✅ | ✅ |
 | Commit queuing logic (latest-wins, replace pending) | ✅ | ✅ | ✅ |
-| Deployment lifecycle state machine transitions | ✅ | | |
+| Deployment lifecycle state machine transitions | ✅ | ✅ | ✅ |
 | Process supervision: backoff timing, degraded detection | ✅ | ✅ | ✅ |
 | Socket API handlers | ✅ | | |
 | Volume and log path derivation from resource addresses | ✅ | ✅ | ✅ |
