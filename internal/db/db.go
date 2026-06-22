@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -107,6 +108,35 @@ func (d *DB) ListProjects() ([]Project, error) {
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// AddDeployment inserts a new deployment record with status "building" and returns its ID.
+func (d *DB) AddDeployment(address, sha string, startedAt time.Time) (int64, error) {
+	res, err := d.conn.Exec(
+		`INSERT INTO deployments (address, sha, status, started_at) VALUES (?, ?, 'building', ?)`,
+		address, sha, startedAt.Unix(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("add deployment: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("last insert id: %w", err)
+	}
+	return id, nil
+}
+
+// FinishDeployment updates the status and finished_at of a deployment record.
+// status must be one of: active, failed, rolled_back.
+func (d *DB) FinishDeployment(id int64, status string, finishedAt time.Time) error {
+	_, err := d.conn.Exec(
+		`UPDATE deployments SET status = ?, finished_at = ? WHERE id = ?`,
+		status, finishedAt.Unix(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("finish deployment %d: %w", id, err)
+	}
+	return nil
 }
 
 // SetCurrentSHA records the active SHA for a project after a successful deployment.
