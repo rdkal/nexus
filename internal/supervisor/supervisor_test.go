@@ -26,7 +26,7 @@ func blockProc() *testProcess {
 // crashProc returns immediately with exit code 1.
 func crashProc() *testProcess {
 	p := &testProcess{id: "crash", exitCh: make(chan struct{}), code: 1}
-	close(p.exitCh)
+	p.once.Do(func() { close(p.exitCh) }) // use Once so Signal() is a no-op
 	return p
 }
 
