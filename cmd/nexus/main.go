@@ -1,14 +1,19 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
+	"github.com/rdkal/nexus/internal/daemon"
 	"github.com/rdkal/nexus/internal/db"
 	"github.com/rdkal/nexus/internal/home"
 	"github.com/rdkal/nexus/internal/spec"
+	"github.com/rdkal/nexus/internal/supervisor"
 )
 
 func main() {
@@ -51,8 +56,14 @@ func daemonCmd(homeFlag *string) *cobra.Command {
 			defer database.Close()
 
 			fmt.Fprintf(os.Stderr, "nexus daemon starting (home=%s)\n", homeDir)
-			// TODO: start git polling loop, unix socket server, process supervisor
-			select {}
+
+			sup := supervisor.NewRemoteSupervisor(paths.PMSocket)
+			d := daemon.New(database, sup, paths)
+
+			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+			defer stop()
+
+			return d.Run(ctx)
 		},
 	}
 }

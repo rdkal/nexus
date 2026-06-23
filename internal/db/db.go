@@ -139,6 +139,58 @@ func (d *DB) FinishDeployment(id int64, status string, finishedAt time.Time) err
 	return nil
 }
 
+// GetProject returns a single project by name.
+func (d *DB) GetProject(name string) (Project, error) {
+	row := d.conn.QueryRow(
+		`SELECT name, spec_path, ref, COALESCE(current_sha, '') FROM projects WHERE name = ?`, name,
+	)
+	var p Project
+	if err := row.Scan(&p.Name, &p.SpecPath, &p.Ref, &p.CurrentSHA); err != nil {
+		return Project{}, fmt.Errorf("get project %q: %w", name, err)
+	}
+	return p, nil
+}
+
+// Deployment is a record of one deploy attempt for a project.
+type Deployment struct {
+	ID         int64
+	Address    string
+	SHA        string
+	Status     string
+	StartedAt  time.Time
+	FinishedAt *time.Time
+}
+
+// ListDeployments returns up to limit deployments for address, newest first.
+func (d *DB) ListDeployments(address string, limit int) ([]Deployment, error) {
+	rows, err := d.conn.Query(
+		`SELECT id, address, sha, status, started_at, finished_at
+		 FROM deployments WHERE address = ? ORDER BY started_at DESC LIMIT ?`,
+		address, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list deployments: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Deployment
+	for rows.Next() {
+		var dep Deployment
+		var startedUnix int64
+		var finishedUnix *int64
+		if err := rows.Scan(&dep.ID, &dep.Address, &dep.SHA, &dep.Status, &startedUnix, &finishedUnix); err != nil {
+			return nil, err
+		}
+		dep.StartedAt = time.Unix(startedUnix, 0)
+		if finishedUnix != nil {
+			t := time.Unix(*finishedUnix, 0)
+			dep.FinishedAt = &t
+		}
+		out = append(out, dep)
+	}
+	return out, rows.Err()
+}
+
 // SetCurrentSHA records the active SHA for a project after a successful deployment.
 func (d *DB) SetCurrentSHA(name, sha string) error {
 	res, err := d.conn.Exec(`UPDATE projects SET current_sha = ? WHERE name = ?`, sha, name)

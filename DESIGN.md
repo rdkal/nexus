@@ -52,13 +52,15 @@ nexus project remove my-system
 
 The install script:
 
-1. Installs `nexus-launcher` to `~/.local/bin/nexus-launcher` (never updated again — see Self-Update)
+1. Installs `nexus-pm` to `$NEXUS_HOME/bin/nexus-pm` (the process manager — thin, stable, rarely updated)
 2. Installs the initial `nexus` binary to `$NEXUS_HOME/bin/nexus`
 3. Creates `$NEXUS_HOME/` directory structure
-4. Registers and starts a user-mode service pointing at `nexus-launcher`:
+4. Registers and starts a user-mode service pointing at `nexus-pm`:
    - Linux: `systemctl --user enable/start nexus`
    - macOS: `launchctl load ~/Library/LaunchAgents/nexus.plist`
 5. Clones each `--project` repo and begins watching it
+
+`nexus-pm` starts and supervises the `nexus` runtime automatically at boot.
 
 No root or sudo required.
 
@@ -153,9 +155,12 @@ Three top-level trees, each with a distinct addressing scheme:
 $NEXUS_HOME/                                         default: ~/.nexus
 │
 ├── bin/
-│   └── nexus                                        nexus daemon binary
+│   ├── nexus-pm                                     process manager binary (systemd target)
+│   └── nexus                                        runtime binary (supervised by nexus-pm)
 │
 ├── nexus.db                                         sqlite: deployment state, service state
+├── nexus-pm.sock                                    process manager API (spawn/stop/status)
+├── nexus.sock                                       runtime API (projects/services/logs)
 │
 ├── repos/                                           keyed by spec path — external projects only
 │   │
@@ -445,70 +450,77 @@ If VERIFY fails:
 
 ## Process Supervision
 
-Nexus is the supervisor for all service processes. No per-service systemd units.
+`nexus-pm` owns all OS processes. The `nexus` runtime delegates process management to it
+over `nexus-pm.sock` — nexus holds no process handles itself. This means the runtime can be
+freely restarted (for updates) without touching any supervised service.
 
-- Services are direct child processes of the nexus daemon
+`nexus-pm` also supervises the `nexus` runtime binary as a hardcoded service: it starts nexus
+at boot and restarts it on crash, just like any user service.
+
+- Services are direct child processes of `nexus-pm`
 - On unexpected exit: restart with exponential backoff — 1s, 2s, 4s … cap 60s
 - More than 5 crashes in 60 seconds → service marked `degraded`, no further auto-restart, UI alert
-- During planned SHUTDOWN: SIGTERM, then SIGKILL after grace period (daemon-wide, 30s default)
+- During planned SHUTDOWN: SIGTERM, then SIGKILL after grace period (default 30s)
 
 ---
 
 ## Nexus Self-Update
 
-Nexus uses a **thin launcher** to avoid a circular restart problem.
-
-### Two-binary design
+### Three-process design
 
 ```
-~/.local/bin/nexus-launcher         installed once by install.sh, never updated by nexus
-$NEXUS_HOME/bin/nexus               the real daemon binary, updated by deployments
+$NEXUS_HOME/bin/nexus-pm        process manager — the systemd target, rarely updated
+$NEXUS_HOME/bin/nexus           runtime — updated by deployments
+nexus-web (optional)            Python frontend — a normal nexus project, deployed like any other
 ```
 
-The OS service unit points at `nexus-launcher`. The launcher is a minimal shell script
-that exec's `$NEXUS_HOME/bin/nexus`. It never changes.
+`nexus-pm` is the only process systemd manages. It starts `nexus` as a supervised service and
+restarts it on crash — exactly like any user service. This is the key property: restarting nexus
+has no effect on user services, because nexus-pm holds all process handles.
 
 ### Self-update flow
 
-Nexus manages itself by nesting its own repo:
+Nexus tracks itself as a project with no services — only a build step:
 
 ```yaml
-projects:
-  nexus:
-    src: github.com/rdkal/nexus
-    ref: "@main"
-```
-
-`github.com/rdkal/nexus` — nexus.yaml:
-```yaml
-build: ./scripts/build.sh   # compiles new binary to $NEXUS_HOME/bin/nexus.next,
-                             # then atomically moves it to $NEXUS_HOME/bin/nexus
-services:
-  nexus-daemon:
-    run: $NEXUS_HOME/bin/nexus daemon
-  nexus-ui:
-    run: python -m nexus.ui --socket $NEXUS_HOME/nexus.sock --port 7777
+# github.com/rdkal/nexus — nexus.yaml
+build: ./scripts/build.sh   # compiles new binary, atomically swaps $NEXUS_HOME/bin/nexus
+# no services: — nexus-pm owns the nexus process directly
 ```
 
 When a new nexus commit lands:
 
 1. **BUILD**: new binary compiled and atomically written to `$NEXUS_HOME/bin/nexus`.
-   The old binary is already in memory — replacing the file has no effect on the running process.
-2. **SHUTDOWN**: nexus sends SIGTERM to its own `nexus-daemon` service (itself).
-   It writes all pending state to `nexus.db` and exits.
-3. The OS init system sees the process exit and restarts `nexus-launcher`, which
-   exec's `$NEXUS_HOME/bin/nexus` — now the new binary.
-4. **STARTUP**: new nexus reads `nexus.db`, reconstructs the full service tree, and
-   resumes supervision of all other services — including `nexus-ui`, which it starts normally.
+2. **PROMOTE**: SHA recorded in `nexus.db`. Old worktree removed.
+3. nexus calls `POST /runtime/restart` on `nexus-pm.sock`.
+4. `nexus-pm` SIGTERMs the current nexus runtime and starts a new one from the new binary.
+5. New nexus connects to `nexus-pm`, recovers all project state from `nexus.db`. User services
+   kept running through steps 3–4 — nexus-pm never touched them.
 
-Nexus does **not** try to spawn `nexus-daemon` as a child process. The OS service unit
-owns the restart. Nexus recognises it is managing itself and skips the STARTUP step for
-`nexus-daemon` only, leaving that entirely to the init system. All other services
-(including `nexus-ui`) are started as usual.
+No launcher script. No "skip STARTUP" special case. No state handshake between old and new nexus.
 
-**Key invariant**: all state lives in `nexus.db` and the filesystem. The new process
-reconstructs everything from disk with no handshake with the old one. Other services
-keep running through the brief daemon restart.
+### nexus-web as a normal project
+
+The web UI is not bundled or special-cased. It is simply a project added by the operator:
+
+```
+nexus project add github.com/rdkal/nexus-web --ref @latest
+```
+
+Its `nexus.yaml` looks like any other service project:
+
+```yaml
+build: pip install -r requirements.txt
+services:
+  web:
+    run: python -m nexus_web --socket $NEXUS_HOME/nexus.sock --port 7777
+```
+
+`nexus-pm` manages the `web` process like any other service. Deploying or removing nexus-web
+has zero effect on the runtime or any other project.
+
+**Key invariant**: all state lives in `nexus.db` and on disk. On restart, nexus reconstructs
+everything from those sources — no handshake with the old process needed.
 
 ---
 
@@ -557,29 +569,41 @@ POST /api/<project-name>/services/<name>/restart
 
 ## Implementation
 
-### Daemon (Go)
+### nexus-pm (Go)
 
-The nexus daemon is written in Go. It owns:
+The process manager is a thin Go binary. It owns:
 
-- Process supervision and restart backoff
+- OS process lifecycles for all services (spawn, SIGTERM/SIGKILL, restart backoff, degraded detection)
+- The hardcoded `nexus` runtime service — starts it at boot, restarts on crash
+- A `nexus-pm.sock` HTTP API used by the runtime to spawn/stop/query services
+
+nexus-pm never reads `nexus.db` or runs git commands. It is intentionally minimal so it
+rarely needs updating — updating nexus-pm is the one event that briefly restarts all services.
+
+### nexus (Go)
+
+The runtime is written in Go. It owns:
+
 - Git polling via `git ls-remote`
 - Deployment lifecycle (detect, checkout, build, swap, verify, rollback)
 - State persistence in SQLite (`nexus.db`)
-- Unix socket at `$NEXUS_HOME/nexus.sock`
+- `nexus.sock` HTTP API (projects, history, services, logs, redeploy, restart)
 
-The daemon never binds a public network port. All external access goes through
-the Python web UI.
+The runtime delegates all process management to nexus-pm via `RemoteSupervisor` — a thin HTTP
+client implementing the same `Spawn/Stop/Status` interface as the in-process supervisor, but
+sending requests to `nexus-pm.sock`. The runtime holds no OS process handles.
 
-### Web UI (Python)
+The runtime never binds a public network port.
 
-The web UI is written in Python using [iris](https://rdkal.github.io/iris). It is
-defined as a service inside nexus's own `nexus.yaml` and supervised by the daemon
-like any other process. It connects to `$NEXUS_HOME/nexus.sock` using standard HTTP
-over a Unix socket transport and serves the public interface on port 7777.
+### nexus-web (Python)
 
-### Daemon socket
+The web UI is written in Python using [iris](https://rdkal.github.io/iris). It is an **optional**
+project added by the operator — not bundled or special-cased in either nexus-pm or nexus.
+It connects to `$NEXUS_HOME/nexus.sock` and serves the public HTTP interface on port 7777.
 
-The daemon exposes an HTTP API over the Unix socket. The Python UI is the only client:
+### nexus.sock API
+
+The runtime exposes an HTTP API over the Unix socket:
 
 ```
 GET  /projects
@@ -591,7 +615,18 @@ GET  /projects/<address>/services/<name>/log
 POST /projects/<address>/services/<name>/restart
 ```
 
-This is an internal interface — its shape can change freely without affecting users.
+### nexus-pm.sock API
+
+The process manager API is used exclusively by the nexus runtime:
+
+```
+POST   /services/{key}      spawn a service (no-op if already running)
+DELETE /services/{key}      stop a service (blocks until exited)
+GET    /services/{key}      service status
+POST   /runtime/restart     stop and restart the nexus runtime binary
+```
+
+Both sockets are internal interfaces — their shape can change freely without affecting users.
 
 ---
 
@@ -658,7 +693,7 @@ They are slower and intended to run in CI rather than on every save.
 - Commit queuing (latest-wins, depth 1)
 - Process supervision with restart backoff and degraded state
 - Daemon-wide 30s shutdown grace period
-- Self-update via thin launcher
+- Self-update via nexus-pm (three-process design: nexus-pm → nexus → user services)
 - `NEXUS_HOME` configuration
 - Go daemon with Unix socket internal API
 - Python/iris web UI as a supervised nexus service (port 7777)
