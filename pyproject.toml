@@ -4,9 +4,15 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatchling.build.targets.wheel]
 packages = ["src/nexus"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

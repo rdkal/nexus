@@ -142,10 +142,17 @@ func (d *Daemon) runPoller(ctx context.Context, ps *projectState) {
 	lastSHA := ps.sha
 	ps.mu.RUnlock()
 
+	interval := 30 * time.Second
+	if v := os.Getenv("NEXUS_POLL_INTERVAL"); v != "" {
+		if parsed, err := time.ParseDuration(v); err == nil {
+			interval = parsed
+		}
+	}
+
 	pol := &poller.Poller{
 		RepoDir:  d.Paths.RepoDir(ps.project.SpecPath),
 		Ref:      ps.project.Ref,
-		Interval: 30 * time.Second,
+		Interval: interval,
 	}
 	pol.Run(ctx, ps.queue, lastSHA)
 }
