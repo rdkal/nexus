@@ -3,14 +3,14 @@
 | Task | Designed | Implemented | Tested |
 |------|:--------:|:-----------:|:------:|
 | **Foundation** |
-| Install script (`curl \| sh`, sets up NEXUS_HOME, registers user service) | ✅ | | |
+| Install script (`curl \| sh`, sets up NEXUS_HOME, registers user service) | ✅ | ✅ | ✅ |
 | `nexus-pm` process manager binary (`cmd/nexus-pm`) | ✅ | ✅ | |
 | `nexus-pm.sock` HTTP API: spawn / stop / status / runtime-restart | ✅ | ✅ | |
 | `RemoteSupervisor` client in nexus runtime (talks to nexus-pm.sock) | ✅ | ✅ | |
 | `PMSocket` path added to `home.Paths` | ✅ | ✅ | ✅ |
 | NEXUS_HOME directory structure creation | ✅ | ✅ | ✅ |
-| systemd user service registration (Linux) — points to `nexus-pm` | ✅ | | |
-| launchctl plist registration (macOS) — points to `nexus-pm` | ✅ | | |
+| systemd user service registration (Linux) — points to `nexus-pm` | ✅ | ✅ | |
+| launchctl plist registration (macOS) — points to `nexus-pm` | ✅ | ✅ | |
 | **Configuration** |
 | `nexus.yaml` parser (external projects, inline projects, recursive `projects:`) | ✅ | ✅ | ✅ |
 | Project name inference from spec path (final segment default) | ✅ | ✅ | ✅ |
@@ -43,7 +43,7 @@
 | Degraded state: >5 crashes in 60s → stop restarting, alert | ✅ | ✅ | ✅ |
 | Service log capture to `logs/<address>/<service>/current.log` | ✅ | ✅ | ✅ |
 | **Volumes** |
-| Volume directory creation at `volumes/<address>/` on first use | ✅ | | |
+| Volume directory creation at `volumes/<address>/` on first use | ✅ | ✅ | |
 | **State persistence** |
 | `nexus.db` SQLite schema (projects, deployments, service state) | ✅ | ✅ | ✅ |
 | Full state recovery from `nexus.db` on daemon restart | ✅ | ✅ | |
@@ -75,8 +75,12 @@
 | Volume and log path derivation from resource addresses | ✅ | ✅ | ✅ |
 | Project tree loading: external, inline, nested | ✅ | ✅ | ✅ |
 | **pytest e2e tests** |
-| Test fixtures: daemon subprocess, local bare git repos, socket client | ✅ | | |
-| Service starts after first commit | ✅ | | |
+| Test fixtures: daemon subprocess, local bare git repos, socket client | ✅ | ✅ | ✅ |
+| Service starts after first commit | ✅ | ✅ | ✅ |
+| Deployment recorded in history (active status) | ✅ | ✅ | ✅ |
+| Failed build does not promote SHA | ✅ | ✅ | ✅ |
+| New commit triggers automatic redeploy | ✅ | ✅ | ✅ |
+| Redeploy same SHA reuses worktree, keeps service running | ✅ | ✅ | ✅ |
 | Service restarts on crash, reaches degraded after threshold | ✅ | | |
 | Rollback on failed build (previous services kept running) | ✅ | | |
 | New commit replaces queued SHA during active build | ✅ | | |

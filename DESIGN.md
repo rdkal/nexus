@@ -50,15 +50,21 @@ nexus project add github.com/myorg/system-a:my-custom-name
 nexus project remove my-system
 ```
 
+Nexus is distributed as source and built on the host: the installer requires `go`
+(>= 1.22) and `git` on `PATH`. No prebuilt binaries and no root are needed. Binaries
+are produced with `go install` into `$NEXUS_HOME/bin` (from the published module by
+default, or from a local checkout via `NEXUS_SRC`).
+
 The install script:
 
-1. Installs `nexus-pm` to `$NEXUS_HOME/bin/nexus-pm` (the process manager — thin, stable, rarely updated)
-2. Installs the initial `nexus` binary to `$NEXUS_HOME/bin/nexus`
+1. Builds `nexus-pm` into `$NEXUS_HOME/bin/nexus-pm` (the process manager — thin, stable, rarely updated)
+2. Builds the initial `nexus` runtime into `$NEXUS_HOME/bin/nexus`
 3. Creates `$NEXUS_HOME/` directory structure
-4. Registers and starts a user-mode service pointing at `nexus-pm`:
-   - Linux: `systemctl --user enable/start nexus`
-   - macOS: `launchctl load ~/Library/LaunchAgents/nexus.plist`
-5. Clones each `--project` repo and begins watching it
+4. Registers each `--project` repo via `nexus project add`
+5. Installs and starts a user-mode service pointing at `nexus-pm`:
+   - Linux: `systemctl --user enable --now nexus` (unit at `~/.config/systemd/user/nexus.service`)
+   - macOS: `launchctl load ~/Library/LaunchAgents/com.rdkal.nexus.plist`
+   - Neither available: prints instructions to run `nexus-pm` manually
 
 `nexus-pm` starts and supervises the `nexus` runtime automatically at boot.
 

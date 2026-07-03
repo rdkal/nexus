@@ -389,6 +389,76 @@ func TestDeploy_VolumeEnvInjection(t *testing.T) {
 	}
 }
 
+// TestDeploy_RedeploySameSHA verifies that redeploying the currently-active SHA
+// reuses the existing worktree: it must not re-run checkout (the worktree already
+// exists) and must not remove the worktree during cleanup (services run from it).
+func TestDeploy_RedeploySameSHA(t *testing.T) {
+	cfg := &config.ProjectFile{
+		Build:    "make build",
+		Services: map[string]config.Service{"api": {Run: "python api.py"}},
+	}
+	sup := &mockSupervisor{
+		statuses: map[string]supervisor.Status{
+			"my-system/api": {Running: true},
+		},
+	}
+	dep := newDeployer(t, sup, cfg, nil)
+
+	must(t, dep.DB.(*db.DB).AddProject(db.Project{
+		Name: "my-system", SpecPath: "github.com/myorg/my-system", Ref: "@main",
+	}))
+	must(t, dep.DB.(*db.DB).SetCurrentSHA("my-system", "abc123"))
+
+	var added, removed []string
+	var builds int
+	dep.WorktreeAdd = func(_, wt, _ string) error { added = append(added, wt); return nil }
+	dep.WorktreeRemove = func(_, wt string) error { removed = append(removed, wt); return nil }
+	dep.RunBuild = func(_, _ string, _ []string, _ string) error { builds++; return nil }
+
+	// Redeploy the same SHA that is already active: NewSHA == PrevSHA.
+	err := dep.Deploy(context.Background(), lifecycle.Request{
+		Name:         "my-system",
+		Address:      "my-system",
+		Ref:          "@main",
+		SpecPath:     "github.com/myorg/my-system",
+		RootSpecPath: "github.com/myorg/my-system",
+		NewSHA:       "abc123",
+		PrevSHA:      "abc123",
+		PrevConfig:   cfg,
+	})
+	if err != nil {
+		t.Fatalf("redeploy same SHA: %v", err)
+	}
+
+	// Checkout must be skipped — the worktree already exists.
+	if len(added) != 0 {
+		t.Errorf("expected 0 worktree adds on same-SHA redeploy, got %v", added)
+	}
+	// Cleanup must be skipped — removing it would kill the live worktree.
+	if len(removed) != 0 {
+		t.Errorf("expected 0 worktree removes on same-SHA redeploy, got %v", removed)
+	}
+	// Build must re-run and the service must be stopped then respawned.
+	if builds != 1 {
+		t.Errorf("expected build to re-run once, got %d", builds)
+	}
+	if n := len(sup.spawnNames()); n != 1 {
+		t.Errorf("expected 1 respawn, got %d", n)
+	}
+	sup.mu.Lock()
+	stops := len(sup.stopped)
+	sup.mu.Unlock()
+	if stops != 1 {
+		t.Errorf("expected 1 stop (shutdown of old service), got %d", stops)
+	}
+
+	// SHA remains active.
+	projects, _ := dep.DB.(*db.DB).ListProjects()
+	if len(projects) == 0 || projects[0].CurrentSHA != "abc123" {
+		t.Errorf("CurrentSHA should remain abc123; projects = %v", projects)
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {

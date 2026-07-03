@@ -118,3 +118,44 @@ def test_new_commit_triggers_redeploy(nexus, git_repo):
 
     services = nexus.client.list_services("myproject")
     assert any(s["running"] for s in services), f"no running service after redeploy: {services}"
+
+
+def test_redeploy_same_sha_keeps_service_running(nexus, git_repo):
+    """POST /redeploy re-runs the deploy at the current SHA without breaking the
+    live worktree: the service must still be running and the SHA unchanged."""
+    sha = git_repo.commit({"nexus.yaml": NEXUS_YAML_SLEEP})
+
+    nexus.add_project(git_repo.spec_path, "myproject")
+    nexus.start()
+    nexus.wait_for_socket()
+    nexus.wait_for_sha("myproject")
+
+    history_before = nexus.client.get_history("myproject")
+    active_before = len([e for e in history_before if e["status"] == "active"])
+
+    status, _ = nexus.client.redeploy("myproject")
+    assert status == 202, f"redeploy should be accepted, got {status}"
+
+    # Wait for a second active deployment record to appear (the redeploy).
+    history = nexus.wait_for_history_status("myproject", "active")
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        history = nexus.client.get_history("myproject")
+        active_now = len([e for e in history if e["status"] == "active"])
+        if active_now > active_before:
+            break
+        time.sleep(1)
+    else:
+        pytest.fail(
+            f"redeploy did not produce a new active deployment; "
+            f"before={active_before}, history={history}"
+        )
+
+    # SHA unchanged and the service is still running from the reused worktree.
+    project = nexus.client.get_project("myproject")
+    assert project["current_sha"] == sha, f"SHA changed on same-SHA redeploy: {project}"
+
+    services = nexus.client.list_services("myproject")
+    assert services and all(s["running"] for s in services), (
+        f"service not running after same-SHA redeploy: {services}"
+    )
