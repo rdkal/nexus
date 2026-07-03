@@ -43,7 +43,6 @@ func main() {
 		Env:     append(os.Environ(), "NEXUS_HOME="+paths.Home),
 		LogFile: paths.ServiceLog("nexus-runtime"),
 	}
-	sup.Spawn("nexus-runtime", runtimeSpec)
 
 	srv := &pmServer{sup: sup, runtimeKey: "nexus-runtime", runtimeSpec: runtimeSpec}
 
@@ -71,6 +70,10 @@ func (s *pmServer) serve(ctx context.Context, paths home.Paths) error {
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", paths.PMSocket, err)
 	}
+
+	// Spawn nexus runtime AFTER the socket is ready so nexus can reach nexus-pm.sock
+	// immediately on startup without connection-refused errors.
+	s.sup.Spawn(s.runtimeKey, s.runtimeSpec)
 
 	mux := http.NewServeMux()
 	// {key...} matches service keys that contain slashes (e.g. "my-system/api").
