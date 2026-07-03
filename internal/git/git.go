@@ -30,9 +30,31 @@ func Fetch(repoDir string) error {
 }
 
 // WorktreeAdd creates a detached worktree at path checked out at sha.
+//
+// It is idempotent: worktree paths are keyed by SHA, so if a valid worktree
+// already exists at path it is already checked out at the right commit and is
+// reused as-is. This lets a deploy recover cleanly when a previous attempt was
+// interrupted after checkout — for example by a self-update restart of nexus.
+// A leftover directory without worktree metadata is cleared before re-creating.
 func WorktreeAdd(repoDir, path, sha string) error {
+	if isWorktree(path) {
+		return nil
+	}
+	if _, err := os.Stat(path); err == nil {
+		// Path exists but isn't a valid worktree (e.g. a partially created one).
+		// Remove it and prune stale admin entries so `worktree add` can proceed.
+		_ = os.RemoveAll(path)
+		_, _ = run(repoDir, "worktree", "prune")
+	}
 	_, err := run(repoDir, "worktree", "add", "--detach", path, sha)
 	return err
+}
+
+// isWorktree reports whether path is a checked-out git worktree. A linked
+// worktree has a .git file (not directory) linking back to the main repo.
+func isWorktree(path string) bool {
+	info, err := os.Stat(filepath.Join(path, ".git"))
+	return err == nil && !info.IsDir()
 }
 
 // WorktreeRemove removes the worktree at path from the bare clone.

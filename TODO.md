@@ -47,6 +47,8 @@
 | **State persistence** |
 | `nexus.db` SQLite schema (projects, deployments, service state) | ✅ | ✅ | ✅ |
 | Full state recovery from `nexus.db` on daemon restart | ✅ | ✅ | |
+| Concurrency-safe DB (WAL, busy_timeout, single writer) | ✅ | ✅ | ✅ |
+| Idempotent worktree checkout (survives interrupted deploys) | ✅ | ✅ | ✅ |
 | **Daemon socket** |
 | Unix socket server at `$NEXUS_HOME/nexus.sock` | ✅ | ✅ | ✅ |
 | `GET /projects` — list all projects and health summary | ✅ | ✅ | ✅ |
@@ -57,8 +59,10 @@
 | `GET /projects/<address>/services/<name>/log` — stream service log | ✅ | ✅ | |
 | `POST /projects/<address>/services/<name>/restart` — manual restart | ✅ | ✅ | ✅ |
 | **Self-update** |
-| Build script: compile Go binary, atomic swap to `$NEXUS_HOME/bin/nexus` | ✅ | | |
-| After self-build deploy, call `POST /runtime/restart` on nexus-pm.sock | ✅ | | |
+| Build script: compile Go binary, atomic swap to `$NEXUS_HOME/bin/nexus` | ✅ | ✅ | ✅ |
+| `nexus.yaml` self-tracking config (build-only, no services) | ✅ | ✅ | ✅ |
+| After self-build deploy, call `POST /runtime/restart` on nexus-pm.sock | ✅ | ✅ | ✅ |
+| Self-identification via spec path (NEXUS_SELF_SPEC override) | ✅ | ✅ | ✅ |
 | **Web UI (Python / iris)** |
 | Unix socket HTTP client transport | ✅ | | |
 | Project tree page (`/`) | ✅ | | |
@@ -81,6 +85,7 @@
 | Failed build does not promote SHA | ✅ | ✅ | ✅ |
 | New commit triggers automatic redeploy | ✅ | ✅ | ✅ |
 | Redeploy same SHA reuses worktree, keeps service running | ✅ | ✅ | ✅ |
+| Self-update: nexus restarts itself, user services keep running (same PID) | ✅ | ✅ | ✅ |
 | Service restarts on crash, reaches degraded after threshold | ✅ | | |
 | Rollback on failed build (previous services kept running) | ✅ | | |
 | New commit replaces queued SHA during active build | ✅ | | |

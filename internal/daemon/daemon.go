@@ -18,6 +18,12 @@ import (
 	"github.com/rdkal/nexus/internal/supervisor"
 )
 
+// defaultSelfSpecPath is the spec path of nexus's own repository. A project with
+// this spec path is nexus itself: after it deploys, the runtime is restarted so
+// nexus-pm loads the freshly built binary. Overridable via NEXUS_SELF_SPEC (for
+// forks or tests). Empty disables self-update restarts entirely.
+const defaultSelfSpecPath = "github.com/rdkal/nexus"
+
 // SupervisorAPI is the subset of supervisor.Supervisor used by the daemon.
 type SupervisorAPI interface {
 	Spawn(name string, spec supervisor.ServiceSpec)
@@ -25,11 +31,23 @@ type SupervisorAPI interface {
 	Status(name string) (supervisor.Status, bool)
 }
 
+// runtimeRestarter is implemented by the remote supervisor (RemoteSupervisor):
+// it asks nexus-pm to restart the nexus runtime binary. The in-process supervisor
+// does not implement it — self-update restarts only apply to the split deployment.
+type runtimeRestarter interface {
+	RestartRuntime() error
+}
+
 // Daemon wires together the git poller, deployment lifecycle, and process supervisor.
 type Daemon struct {
 	DB    *db.DB
 	Sup   SupervisorAPI
 	Paths home.Paths
+
+	// SelfSpecPath identifies nexus's own project. When a project with this spec
+	// path finishes deploying, the runtime is restarted onto the new binary.
+	// Defaults to defaultSelfSpecPath (or $NEXUS_SELF_SPEC); empty disables it.
+	SelfSpecPath string
 
 	mu       sync.RWMutex
 	projects map[string]*projectState
@@ -50,11 +68,16 @@ type projectState struct {
 
 // New creates a Daemon ready to be started with Run.
 func New(database *db.DB, sup SupervisorAPI, paths home.Paths) *Daemon {
+	selfSpec := defaultSelfSpecPath
+	if v, ok := os.LookupEnv("NEXUS_SELF_SPEC"); ok {
+		selfSpec = v // may be empty, which disables self-update restarts
+	}
 	return &Daemon{
-		DB:       database,
-		Sup:      sup,
-		Paths:    paths,
-		projects: make(map[string]*projectState),
+		DB:           database,
+		Sup:          sup,
+		Paths:        paths,
+		SelfSpecPath: selfSpec,
+		projects:     make(map[string]*projectState),
 	}
 }
 
@@ -218,6 +241,35 @@ func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 		ps.worktree = newWorktree
 		ps.svcSpecs = specs
 		ps.mu.Unlock()
+
+		// Self-update: if this project is nexus itself, the build step has already
+		// swapped $NEXUS_HOME/bin/nexus and the SHA is promoted. Ask nexus-pm to
+		// restart the runtime so the new binary is loaded. This SIGTERMs the current
+		// process, so it does not return; user services keep running throughout.
+		if d.isSelf(ps.project.SpecPath) {
+			d.restartRuntime(ps.project.Name)
+		}
+	}
+}
+
+// isSelf reports whether specPath identifies nexus's own repository.
+func (d *Daemon) isSelf(specPath string) bool {
+	return d.SelfSpecPath != "" && specPath == d.SelfSpecPath
+}
+
+// restartRuntime asks nexus-pm to restart the nexus runtime onto the newly built
+// binary. It is a no-op (with a warning) when the supervisor cannot restart the
+// runtime — e.g. an in-process supervisor outside the split deployment.
+func (d *Daemon) restartRuntime(project string) {
+	rr, ok := d.Sup.(runtimeRestarter)
+	if !ok {
+		slog.Warn("daemon: self-update deployed but supervisor cannot restart runtime",
+			"project", project)
+		return
+	}
+	slog.Info("daemon: self-update — requesting runtime restart", "project", project)
+	if err := rr.RestartRuntime(); err != nil {
+		slog.Error("daemon: runtime restart failed", "project", project, "err", err)
 	}
 }
 

@@ -215,12 +215,15 @@ def _add_project_to_db(db_path: Path, name: str, spec_path: str, ref: str = "@ma
 
 
 class NexusFixture:
-    def __init__(self, home: Path, bin_dir: Path, env: dict):
+    def __init__(self, home: Path, bin_dir: Path, env: dict, source_bin_dir: Path):
         self._home = home
         self._bin_dir = bin_dir
         self._env = dict(env)
         self._pm_proc = None
         self.client = NexusClient(str(home / "nexus.sock"))
+        # Pristine session-built binaries (never swapped at runtime). Useful as a
+        # stand-in "new" nexus binary for self-update tests.
+        self.nexus_source = source_bin_dir / "nexus"
 
     @property
     def db_path(self) -> Path:
@@ -230,10 +233,12 @@ class NexusFixture:
         """Register a project in the DB before the daemon starts."""
         _add_project_to_db(self.db_path, name, spec_path, ref)
 
-    def start(self, poll_interval: str = "2s"):
+    def start(self, poll_interval: str = "2s", extra_env: dict | None = None):
         """Start nexus-pm, which auto-starts the nexus daemon."""
         env = dict(self._env)
         env["NEXUS_POLL_INTERVAL"] = poll_interval
+        if extra_env:
+            env.update(extra_env)
         self._pm_proc = subprocess.Popen(
             [str(self._bin_dir / "nexus-pm")],
             env=env,
@@ -278,6 +283,34 @@ class NexusFixture:
             time.sleep(1)
         raise TimeoutError(f"project {project!r} not deployed within {timeout}s")
 
+    def wait_for_project_sha(self, project: str, sha: str, timeout: float = 60.0):
+        """Block until the project's current_sha equals sha.
+
+        Tolerates transient socket failures — the daemon may be mid-restart.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                p = self.client.get_project(project)
+                if isinstance(p, dict) and p.get("current_sha") == sha:
+                    return
+            except Exception:
+                pass
+            time.sleep(0.5)
+        raise TimeoutError(
+            f"project {project!r} did not reach sha={sha} within {timeout}s"
+        )
+
+    def service_pid(self, project: str, service: str) -> str | None:
+        """Return the PID string of a running service, or None if not found."""
+        services = self.client.list_services(project)
+        if not isinstance(services, list):
+            return None
+        for s in services:
+            if s.get("name") == service:
+                return s.get("pid")
+        return None
+
     def wait_for_history_status(
         self, project: str, status: str, timeout: float = 45.0
     ) -> list:
@@ -320,6 +353,6 @@ def nexus(tmp_path, built_binaries):
     }
     env["NEXUS_HOME"] = str(home)
 
-    fix = NexusFixture(home, bin_dir, env)
+    fix = NexusFixture(home, bin_dir, env, built_binaries)
     yield fix
     fix.stop()
