@@ -135,3 +135,61 @@ func TestWorktreeAddRemove(t *testing.T) {
 		t.Error("worktree dir still exists after remove")
 	}
 }
+
+// TestWorktreeAdd_Idempotent verifies that re-adding a worktree that already
+// exists at the same path (as after a deploy interrupted by a restart) succeeds
+// and leaves the checkout intact, rather than failing with "already exists".
+func TestWorktreeAdd_Idempotent(t *testing.T) {
+	upstream := makeUpstream(t)
+	cloneDir := filepath.Join(t.TempDir(), "bare")
+	if err := git.EnsureBareClone(cloneDir, upstream); err != nil {
+		t.Fatalf("EnsureBareClone: %v", err)
+	}
+	sha, err := git.ResolveRef(cloneDir, "@main")
+	if err != nil {
+		t.Fatalf("ResolveRef: %v", err)
+	}
+
+	worktreePath := filepath.Join(t.TempDir(), "wt")
+	if err := git.WorktreeAdd(cloneDir, worktreePath, sha); err != nil {
+		t.Fatalf("first WorktreeAdd: %v", err)
+	}
+
+	// A second add at the same path must be a no-op success (worktree reused).
+	if err := git.WorktreeAdd(cloneDir, worktreePath, sha); err != nil {
+		t.Fatalf("second WorktreeAdd should reuse existing worktree, got: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(worktreePath, "README")); err != nil {
+		t.Fatalf("README missing after idempotent add: %v", err)
+	}
+}
+
+// TestWorktreeAdd_ClearsLeftoverDir verifies that a stray directory without
+// worktree metadata (e.g. a partially created worktree) is cleared and recreated.
+func TestWorktreeAdd_ClearsLeftoverDir(t *testing.T) {
+	upstream := makeUpstream(t)
+	cloneDir := filepath.Join(t.TempDir(), "bare")
+	if err := git.EnsureBareClone(cloneDir, upstream); err != nil {
+		t.Fatalf("EnsureBareClone: %v", err)
+	}
+	sha, err := git.ResolveRef(cloneDir, "@main")
+	if err != nil {
+		t.Fatalf("ResolveRef: %v", err)
+	}
+
+	worktreePath := filepath.Join(t.TempDir(), "wt")
+	// Simulate a leftover directory with no .git metadata.
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreePath, "junk"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := git.WorktreeAdd(cloneDir, worktreePath, sha); err != nil {
+		t.Fatalf("WorktreeAdd over leftover dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(worktreePath, "README")); err != nil {
+		t.Fatalf("README missing after recreating worktree: %v", err)
+	}
+}

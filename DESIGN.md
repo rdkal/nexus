@@ -498,12 +498,25 @@ When a new nexus commit lands:
 
 1. **BUILD**: new binary compiled and atomically written to `$NEXUS_HOME/bin/nexus`.
 2. **PROMOTE**: SHA recorded in `nexus.db`. Old worktree removed.
-3. nexus calls `POST /runtime/restart` on `nexus-pm.sock`.
+3. nexus recognises the deployed project as *itself* and calls `POST /runtime/restart`
+   on `nexus-pm.sock`.
 4. `nexus-pm` SIGTERMs the current nexus runtime and starts a new one from the new binary.
 5. New nexus connects to `nexus-pm`, recovers all project state from `nexus.db`. User services
    kept running through steps 3–4 — nexus-pm never touched them.
 
 No launcher script. No "skip STARTUP" special case. No state handshake between old and new nexus.
+
+**Identifying self**: a project is nexus itself when its spec path matches nexus's own
+repository (`github.com/rdkal/nexus`). This is overridable with `NEXUS_SELF_SPEC` for forks,
+and setting it empty disables self-update restarts entirely. Only a project matching this
+spec path triggers a runtime restart after deploying; every other project deploys normally.
+
+**Surviving the restart**: because the restart deliberately interrupts the runtime, two
+properties keep the system consistent. The database is opened in WAL mode with a
+`busy_timeout` and a single writer, so a brief overlap between the old and new nexus process
+never corrupts state or errors out. And worktree checkout is idempotent — a deploy interrupted
+after checkout but before promotion is recovered by reusing the existing worktree on restart,
+rather than failing because it "already exists".
 
 ### nexus-web as a normal project
 

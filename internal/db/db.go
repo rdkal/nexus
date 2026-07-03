@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -41,11 +42,29 @@ type DB struct {
 }
 
 // Open opens (or creates) the nexus SQLite database at path and applies the schema.
+//
+// The connection is tuned for the daemon's access pattern — several project
+// deploy loops writing concurrently, plus brief overlap between an old and new
+// nexus process during a self-update restart:
+//
+//   - WAL journal mode: readers never block the single writer.
+//   - busy_timeout: a writer waits (instead of erroring SQLITE_BUSY) when the
+//     database is momentarily locked by another connection or process.
+//   - MaxOpenConns(1): serialise writes within this process, so the deploy loops
+//     never contend with each other on a write lock.
 func Open(path string) (*DB, error) {
-	conn, err := sql.Open("sqlite", path)
+	dsn := "file:" + path + "?" + url.Values{
+		"_pragma": {"busy_timeout(10000)", "journal_mode(WAL)", "foreign_keys(1)"},
+	}.Encode()
+
+	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
+	// One connection serialises all access within the process; busy_timeout above
+	// covers contention with any other process (e.g. an overlapping restart).
+	conn.SetMaxOpenConns(1)
+
 	if _, err := conn.Exec(schema); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)

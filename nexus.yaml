@@ -1,0 +1,10 @@
+# Nexus tracks its own repository so it can self-update.
+#
+# The build step rebuilds the nexus runtime and atomically swaps
+# $NEXUS_HOME/bin/nexus. Once the deployment is promoted, nexus asks nexus-pm to
+# restart the runtime onto the new binary; user services keep running throughout,
+# because nexus-pm — not nexus — owns their process handles.
+#
+# There are no services: nexus-pm supervises the nexus runtime directly as a
+# hardcoded service, so nexus does not declare itself here.
+build: ./scripts/build.sh
