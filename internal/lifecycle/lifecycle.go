@@ -115,27 +115,43 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 		prevWorktree = d.Paths.WorktreeDir(req.RootSpecPath, req.Aliases, req.PrevSHA)
 	}
 
+	// A redeploy of the currently-active SHA resolves the new and previous worktree
+	// to the same path. In that case we reuse the existing worktree instead of
+	// re-checking it out, and skip cleanup so we never remove the live worktree.
+	sameWorktree := prevWorktree != "" && newWorktree == prevWorktree
+
+	// removeNewWorktree discards the new worktree on an abort path — but never when
+	// it is the same worktree the current services are running from (same-SHA redeploy).
+	removeNewWorktree := func() {
+		if !sameWorktree {
+			_ = worktreeRemove(repoDir, newWorktree)
+		}
+	}
+
 	// FETCH: download objects from origin.
 	if err := fetch(repoDir); err != nil {
 		return fmt.Errorf("fetch: %w", err)
 	}
 
 	// CHECKOUT: create an isolated worktree at the new SHA.
-	if err := worktreeAdd(repoDir, newWorktree, req.NewSHA); err != nil {
-		return fmt.Errorf("checkout: %w", err)
+	// Skipped on a same-SHA redeploy — the worktree is already checked out.
+	if !sameWorktree {
+		if err := worktreeAdd(repoDir, newWorktree, req.NewSHA); err != nil {
+			return fmt.Errorf("checkout: %w", err)
+		}
 	}
 
 	// LOAD CONFIG from the new worktree.
 	cfg, err := loadConfig(newWorktree)
 	if err != nil {
-		_ = worktreeRemove(repoDir, newWorktree)
+		removeNewWorktree()
 		return fmt.Errorf("load config: %w", err)
 	}
 
 	// RECORD: open a deployment record in the DB.
 	depID, err := d.DB.AddDeployment(req.Address, req.NewSHA, time.Now())
 	if err != nil {
-		_ = worktreeRemove(repoDir, newWorktree)
+		removeNewWorktree()
 		return fmt.Errorf("record deployment: %w", err)
 	}
 
@@ -144,7 +160,7 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 		svcEnv := d.serviceEnv(req, cfg, newWorktree)
 		buildLog := d.Paths.BuildLog(req.Address, req.NewSHA)
 		if err := runBuild(cfg.Build, newWorktree, svcEnv, buildLog); err != nil {
-			_ = worktreeRemove(repoDir, newWorktree)
+			removeNewWorktree()
 			_ = d.DB.FinishDeployment(depID, "failed", time.Now())
 			return fmt.Errorf("build: %w", err)
 		}
@@ -181,7 +197,7 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 	if err := d.verify(cfg, req.Address); err != nil {
 		slog.Warn("deploy: verify failed, rolling back",
 			"address", req.Address, "sha", req.NewSHA, "err", err)
-		d.rollback(req, cfg, prevWorktree, worktreeRemove, repoDir, newWorktree)
+		d.rollback(req, cfg, prevWorktree, removeNewWorktree)
 		_ = d.DB.FinishDeployment(depID, "rolled_back", time.Now())
 		return fmt.Errorf("verify: %w", err)
 	}
@@ -193,7 +209,8 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 	_ = d.DB.FinishDeployment(depID, "active", time.Now())
 
 	// CLEANUP: discard the old worktree now that services are running from the new one.
-	if prevWorktree != "" {
+	// Skipped on a same-SHA redeploy — the "old" worktree is the live one.
+	if prevWorktree != "" && !sameWorktree {
 		if err := worktreeRemove(repoDir, prevWorktree); err != nil {
 			slog.Warn("deploy: cleanup old worktree failed", "path", prevWorktree, "err", err)
 		}
@@ -204,12 +221,13 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 }
 
 // rollback stops new services and restores the previous deployment.
+// removeNewWorktree discards the failed worktree; it is a no-op on a same-SHA
+// redeploy, where the "new" and "previous" worktree are the same live checkout.
 func (d *Deployer) rollback(
 	req Request,
 	newCfg *config.ProjectFile,
 	prevWorktree string,
-	worktreeRemove func(string, string) error,
-	repoDir, newWorktree string,
+	removeNewWorktree func(),
 ) {
 	// Stop new (failed) services.
 	var wg sync.WaitGroup
@@ -237,10 +255,8 @@ func (d *Deployer) rollback(
 		}
 	}
 
-	// Remove the failed worktree.
-	if err := worktreeRemove(repoDir, newWorktree); err != nil {
-		slog.Warn("rollback: failed to remove new worktree", "path", newWorktree, "err", err)
-	}
+	// Remove the failed worktree (skipped on a same-SHA redeploy).
+	removeNewWorktree()
 }
 
 // verify polls all service statuses for VerifyWindow. Returns an error if any service
