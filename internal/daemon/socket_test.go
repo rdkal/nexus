@@ -129,6 +129,43 @@ func TestHandleListProjects_WithProject(t *testing.T) {
 	}
 }
 
+func TestHandleListProjects_IncludesNestedAddresses(t *testing.T) {
+	sup := &stubSupervisor{
+		statuses: map[string]supervisor.Status{
+			"root/db/store": {Running: true},
+		},
+	}
+	d := newTestDaemon(t, sup)
+
+	// A root project and a discovered external sub-project addressed "root/db".
+	d.InjectProject("root", &config.ProjectFile{}, "rootsha")
+	d.InjectProject("root/db", &config.ProjectFile{
+		Services: map[string]config.Service{"store": {Run: "sleep 1"}},
+	}, "dbsha")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/projects", nil)
+	d.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	var out []map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("expected 2 projects (root + root/db), got %d: %v", len(out), out)
+	}
+	// Sorted by address: "root" then "root/db".
+	if out[0]["name"] != "root" || out[1]["name"] != "root/db" {
+		t.Errorf("unexpected addresses/order: %v, %v", out[0]["name"], out[1]["name"])
+	}
+	if out[1]["health"] != "healthy" {
+		t.Errorf("sub-project health = %v, want healthy", out[1]["health"])
+	}
+}
+
 func TestHandleGetProject_NotFound(t *testing.T) {
 	d := newTestDaemon(t, &stubSupervisor{})
 

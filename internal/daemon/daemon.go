@@ -49,21 +49,33 @@ type Daemon struct {
 	// Defaults to defaultSelfSpecPath (or $NEXUS_SELF_SPEC); empty disables it.
 	SelfSpecPath string
 
-	mu       sync.RWMutex
+	mu sync.RWMutex
+	// projects holds every live project keyed by resource address. This includes
+	// both root projects and discovered external sub-projects (e.g. "my-system/db").
 	projects map[string]*projectState
 }
 
-// projectState holds live runtime state for one root project.
+// projectState holds live runtime state for one project — a root project or an
+// external sub-project discovered from a parent's nexus.yaml. The two are handled
+// identically; a sub-project simply carries a non-nil alias chain and a distinct
+// root spec path for worktree placement.
 type projectState struct {
-	project  db.Project
-	queue    *poller.Queue
-	cancel   context.CancelFunc
+	address      string // resource address; root name, or "<root>/<alias>/..." for sub-projects
+	specPath     string // this project's own git repo spec path
+	rootSpecPath string // root deployment's spec path (for worktree placement)
+	ref          string // ref being tracked (e.g. "@main")
+	aliases      []string // alias chain from root; nil for root projects
+	recoverSHA   string   // SHA to recover on startup ("" = never deployed)
+
+	queue  *poller.Queue
+	cancel context.CancelFunc
 
 	mu       sync.RWMutex
-	sha      string                          // current deployed SHA
-	cfg      *config.ProjectFile             // current deployed config (nil = not deployed)
-	worktree string                          // current deployed worktree path
+	sha      string                            // current deployed SHA
+	cfg      *config.ProjectFile               // current deployed config (nil = not deployed)
+	worktree string                            // current deployed worktree path
 	svcSpecs map[string]supervisor.ServiceSpec // keyed by service name
+	children map[string]*projectState          // external sub-projects, keyed by alias
 }
 
 // New creates a Daemon ready to be started with Run.
@@ -81,44 +93,50 @@ func New(database *db.DB, sup SupervisorAPI, paths home.Paths) *Daemon {
 	}
 }
 
-// Run loads all projects from the DB, recovers any previously running services,
-// starts the git polling loops, and serves the Unix socket API.
-// It blocks until ctx is cancelled.
+// Run loads all root projects from the DB, recovers any previously running services
+// (and their sub-projects), starts the git polling loops, and serves the Unix socket
+// API. It blocks until ctx is cancelled.
 func (d *Daemon) Run(ctx context.Context) error {
 	projects, err := d.DB.ListProjects()
 	if err != nil {
 		return err
 	}
 	for _, p := range projects {
-		if err := d.startProject(ctx, p); err != nil {
-			slog.Error("daemon: failed to start project", "project", p.Name, "err", err)
+		ps := &projectState{
+			address:      p.Name,
+			specPath:     p.SpecPath,
+			rootSpecPath: p.SpecPath,
+			ref:          p.Ref,
+			recoverSHA:   p.CurrentSHA,
+			queue:        &poller.Queue{},
+			svcSpecs:     make(map[string]supervisor.ServiceSpec),
+		}
+		if err := d.startProjectState(ctx, ps); err != nil {
+			slog.Error("daemon: failed to start project", "address", ps.address, "err", err)
 		}
 	}
 	return d.serve(ctx)
 }
 
-// startProject initialises a projectState, optionally recovers running services,
-// and launches the poller and deploy-loop goroutines.
-func (d *Daemon) startProject(ctx context.Context, p db.Project) error {
-	repoDir := d.Paths.RepoDir(p.SpecPath)
-	if err := git.EnsureBareClone(repoDir, p.SpecPath); err != nil {
+// startProjectState ensures a bare clone, recovers previously running services if
+// this project has a deployed SHA, registers the project, and launches its poller
+// and deploy-loop goroutines. The project's context is derived from ctx, so
+// cancelling ctx (or a parent sub-project's context) stops this project too.
+func (d *Daemon) startProjectState(ctx context.Context, ps *projectState) error {
+	repoDir := d.Paths.RepoDir(ps.specPath)
+	if err := git.EnsureBareClone(repoDir, ps.specPath); err != nil {
 		return err
 	}
 
 	pctx, cancel := context.WithCancel(ctx)
-	ps := &projectState{
-		project:  p,
-		queue:    &poller.Queue{},
-		cancel:   cancel,
-		svcSpecs: make(map[string]supervisor.ServiceSpec),
-	}
+	ps.cancel = cancel
 
-	if p.CurrentSHA != "" {
-		d.recoverProject(ps)
+	if ps.recoverSHA != "" {
+		d.recoverProject(pctx, ps)
 	}
 
 	d.mu.Lock()
-	d.projects[p.Name] = ps
+	d.projects[ps.address] = ps
 	d.mu.Unlock()
 
 	go d.runPoller(pctx, ps)
@@ -126,22 +144,23 @@ func (d *Daemon) startProject(ctx context.Context, p db.Project) error {
 	return nil
 }
 
-// recoverProject attempts to restart services from the last known-good worktree.
-func (d *Daemon) recoverProject(ps *projectState) {
-	sha := ps.project.CurrentSHA
-	worktree := d.Paths.WorktreeDir(ps.project.SpecPath, nil, sha)
+// recoverProject restarts services from the last known-good worktree and
+// reconciles any external sub-projects declared in that worktree's config.
+func (d *Daemon) recoverProject(ctx context.Context, ps *projectState) {
+	sha := ps.recoverSHA
+	worktree := d.Paths.WorktreeDir(ps.rootSpecPath, ps.aliases, sha)
 
 	cfg, err := config.Parse(filepath.Join(worktree, "nexus.yaml"))
 	if err != nil {
 		slog.Warn("daemon: recover skipped (no worktree config)",
-			"project", ps.project.Name, "worktree", worktree, "err", err)
+			"address", ps.address, "worktree", worktree, "err", err)
 		return
 	}
 
-	env := d.buildEnv(ps.project, cfg, sha, worktree)
+	env := d.buildEnv(ps.address, ps.ref, cfg, sha, worktree)
 	specs := make(map[string]supervisor.ServiceSpec)
 	for name, svc := range cfg.Services {
-		key := serviceKey(ps.project.Name, name)
+		key := serviceKey(ps.address, name)
 		spec := supervisor.ServiceSpec{
 			Command: svc.Run,
 			WorkDir: worktree,
@@ -152,11 +171,15 @@ func (d *Daemon) recoverProject(ps *projectState) {
 		d.Sup.Spawn(key, spec)
 	}
 
+	ps.mu.Lock()
 	ps.sha = sha
 	ps.cfg = cfg
 	ps.worktree = worktree
 	ps.svcSpecs = specs
-	slog.Info("daemon: recovered project", "project", ps.project.Name, "sha", sha)
+	ps.mu.Unlock()
+	slog.Info("daemon: recovered project", "address", ps.address, "sha", sha)
+
+	d.reconcileChildren(ctx, ps, cfg)
 }
 
 // runPoller runs the git polling loop for a project.
@@ -173,8 +196,8 @@ func (d *Daemon) runPoller(ctx context.Context, ps *projectState) {
 	}
 
 	pol := &poller.Poller{
-		RepoDir:  d.Paths.RepoDir(ps.project.SpecPath),
-		Ref:      ps.project.Ref,
+		RepoDir:  d.Paths.RepoDir(ps.specPath),
+		Ref:      ps.ref,
 		Interval: interval,
 	}
 	pol.Run(ctx, ps.queue, lastSHA)
@@ -200,33 +223,34 @@ func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 		ps.mu.RUnlock()
 
 		req := lifecycle.Request{
-			Name:         ps.project.Name,
-			Address:      ps.project.Name,
-			Ref:          ps.project.Ref,
-			SpecPath:     ps.project.SpecPath,
-			RootSpecPath: ps.project.SpecPath,
+			Name:         ps.address,
+			Address:      ps.address,
+			Ref:          ps.ref,
+			SpecPath:     ps.specPath,
+			RootSpecPath: ps.rootSpecPath,
+			Aliases:      ps.aliases,
 			NewSHA:       sha,
 			PrevSHA:      prevSHA,
 			PrevConfig:   prevCfg,
 		}
 
 		if err := dep.Deploy(ctx, req); err != nil {
-			slog.Error("daemon: deploy failed", "project", ps.project.Name, "sha", sha, "err", err)
+			slog.Error("daemon: deploy failed", "address", ps.address, "sha", sha, "err", err)
 			continue
 		}
 
 		// Capture service specs so manual restarts can re-spawn with the same config.
-		newWorktree := d.Paths.WorktreeDir(ps.project.SpecPath, nil, sha)
-		cfg, err := config.Parse(filepath.Join(newWorktree, "nexus.yaml"))
-		if err != nil {
-			slog.Error("daemon: post-deploy config reload failed", "project", ps.project.Name, "err", err)
+		newWorktree := d.Paths.WorktreeDir(ps.rootSpecPath, ps.aliases, sha)
+		cfg, reloadErr := config.Parse(filepath.Join(newWorktree, "nexus.yaml"))
+		if reloadErr != nil {
+			slog.Error("daemon: post-deploy config reload failed", "address", ps.address, "err", reloadErr)
 			cfg = &config.ProjectFile{}
 		}
 
-		env := d.buildEnv(ps.project, cfg, sha, newWorktree)
+		env := d.buildEnv(ps.address, ps.ref, cfg, sha, newWorktree)
 		specs := make(map[string]supervisor.ServiceSpec)
 		for name, svc := range cfg.Services {
-			key := serviceKey(ps.project.Name, name)
+			key := serviceKey(ps.address, name)
 			specs[name] = supervisor.ServiceSpec{
 				Command: svc.Run,
 				WorkDir: newWorktree,
@@ -242,14 +266,131 @@ func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 		ps.svcSpecs = specs
 		ps.mu.Unlock()
 
+		// Start/stop external sub-projects declared in the newly deployed config.
+		// Skip on a reload error: an empty config would spuriously tear down every
+		// sub-project even though the deployment itself succeeded.
+		if reloadErr == nil {
+			d.reconcileChildren(ctx, ps, cfg)
+		}
+
 		// Self-update: if this project is nexus itself, the build step has already
 		// swapped $NEXUS_HOME/bin/nexus and the SHA is promoted. Ask nexus-pm to
 		// restart the runtime so the new binary is loaded. This SIGTERMs the current
 		// process, so it does not return; user services keep running throughout.
-		if d.isSelf(ps.project.SpecPath) {
-			d.restartRuntime(ps.project.Name)
+		if d.isSelf(ps.specPath) {
+			d.restartRuntime(ps.address)
 		}
 	}
+}
+
+// reconcileChildren starts external sub-projects newly declared in cfg and stops
+// those that have been removed. Inline sub-projects (no src:) are not yet handled.
+func (d *Daemon) reconcileChildren(ctx context.Context, ps *projectState, cfg *config.ProjectFile) {
+	desired := make(map[string]config.SubProject)
+	for alias, sub := range cfg.Projects {
+		if sub.IsExternal() {
+			desired[alias] = sub
+		}
+	}
+
+	type startReq struct {
+		alias string
+		sub   config.SubProject
+	}
+	var toStart []startReq
+	var toStop []*projectState
+
+	ps.mu.Lock()
+	if ps.children == nil {
+		ps.children = make(map[string]*projectState)
+	}
+	for alias, sub := range desired {
+		if _, ok := ps.children[alias]; !ok {
+			toStart = append(toStart, startReq{alias, sub})
+		}
+	}
+	for alias, child := range ps.children {
+		if _, ok := desired[alias]; !ok {
+			toStop = append(toStop, child)
+			delete(ps.children, alias)
+		}
+	}
+	ps.mu.Unlock()
+
+	for _, child := range toStop {
+		slog.Info("daemon: removing sub-project", "address", child.address)
+		d.stopProjectState(child)
+	}
+	for _, s := range toStart {
+		d.startChild(ctx, ps, s.alias, s.sub)
+	}
+}
+
+// startChild builds and starts an external sub-project under parent.
+func (d *Daemon) startChild(ctx context.Context, parent *projectState, alias string, sub config.SubProject) {
+	ref := sub.Ref
+	if ref == "" {
+		ref = "@main"
+	}
+	childAddr := parent.address + "/" + alias
+	aliases := append(append([]string{}, parent.aliases...), alias)
+
+	sha, err := d.DB.CurrentSHA(childAddr)
+	if err != nil {
+		slog.Error("daemon: sub-project current SHA lookup failed", "address", childAddr, "err", err)
+	}
+
+	child := &projectState{
+		address:      childAddr,
+		specPath:     sub.Src,
+		rootSpecPath: parent.rootSpecPath,
+		ref:          ref,
+		aliases:      aliases,
+		recoverSHA:   sha,
+		queue:        &poller.Queue{},
+		svcSpecs:     make(map[string]supervisor.ServiceSpec),
+	}
+
+	parent.mu.Lock()
+	if parent.children == nil {
+		parent.children = make(map[string]*projectState)
+	}
+	parent.children[alias] = child
+	parent.mu.Unlock()
+
+	slog.Info("daemon: starting sub-project", "address", childAddr, "src", sub.Src, "ref", ref)
+	if err := d.startProjectState(ctx, child); err != nil {
+		slog.Error("daemon: failed to start sub-project", "address", childAddr, "err", err)
+	}
+}
+
+// stopProjectState cancels a project's loops, stops all of its services, and
+// recursively stops its sub-projects. Used when a sub-project is removed from its
+// parent's config. It is not called on daemon shutdown — nexus-pm keeps services
+// running across a runtime restart.
+func (d *Daemon) stopProjectState(ps *projectState) {
+	if ps.cancel != nil {
+		ps.cancel()
+	}
+
+	ps.mu.RLock()
+	specs := ps.svcSpecs
+	children := make([]*projectState, 0, len(ps.children))
+	for _, c := range ps.children {
+		children = append(children, c)
+	}
+	ps.mu.RUnlock()
+
+	for name := range specs {
+		d.Sup.Stop(serviceKey(ps.address, name))
+	}
+	for _, child := range children {
+		d.stopProjectState(child)
+	}
+
+	d.mu.Lock()
+	delete(d.projects, ps.address)
+	d.mu.Unlock()
 }
 
 // isSelf reports whether specPath identifies nexus's own repository.
@@ -274,16 +415,17 @@ func (d *Daemon) restartRuntime(project string) {
 }
 
 // buildEnv constructs the service environment slice with NEXUS_* variables.
-func (d *Daemon) buildEnv(p db.Project, cfg *config.ProjectFile, sha, worktree string) []string {
+// address is the project's resource address (used for NEXUS_PROJECT and volume paths).
+func (d *Daemon) buildEnv(address, ref string, cfg *config.ProjectFile, sha, worktree string) []string {
 	env := append(os.Environ(),
-		"NEXUS_PROJECT="+p.Name,
+		"NEXUS_PROJECT="+address,
 		"NEXUS_SHA="+sha,
-		"NEXUS_REF="+p.Ref,
+		"NEXUS_REF="+ref,
 		"NEXUS_WORKTREE="+worktree,
 	)
 	for name := range cfg.Volumes {
 		upper := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
-		volPath := d.Paths.VolumeDir(p.Name, name)
+		volPath := d.Paths.VolumeDir(address, name)
 		_ = os.MkdirAll(volPath, 0o755)
 		env = append(env, "NEXUS_VOLUME_"+upper+"="+volPath)
 	}
@@ -293,18 +435,18 @@ func (d *Daemon) buildEnv(p db.Project, cfg *config.ProjectFile, sha, worktree s
 // InjectProject seeds in-memory project state without starting the poller or deploy loop.
 // Intended for use in tests that exercise socket handlers directly.
 func (d *Daemon) InjectProject(name string, cfg *config.ProjectFile, sha string) {
-	_, cancel := context.WithCancel(context.Background())
 	ps := &projectState{
-		project:  db.Project{Name: name},
-		queue:    &poller.Queue{},
-		cancel:   cancel,
-		cfg:      cfg,
-		sha:      sha,
-		svcSpecs: make(map[string]supervisor.ServiceSpec),
+		address:      name,
+		specPath:     name,
+		rootSpecPath: name,
+		queue:        &poller.Queue{},
+		cfg:          cfg,
+		sha:          sha,
+		svcSpecs:     make(map[string]supervisor.ServiceSpec),
 	}
 	d.mu.Lock()
 	d.projects[name] = ps
 	d.mu.Unlock()
 }
 
-func serviceKey(project, service string) string { return project + "/" + service }
+func serviceKey(address, service string) string { return address + "/" + service }

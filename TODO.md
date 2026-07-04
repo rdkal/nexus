@@ -35,6 +35,14 @@
 | PROMOTE: record new SHA as active in `nexus.db` | ✅ | ✅ | ✅ |
 | CLEANUP: `git worktree remove` old worktree | ✅ | ✅ | ✅ |
 | ROLLBACK: restart previous worktree's services on VERIFY failure | ✅ | ✅ | ✅ |
+| **Nested projects** |
+| External sub-project discovery from parent `projects:` (`src:`) | ✅ | ✅ | ✅ |
+| External sub-project independent polling / own-ref deploy | ✅ | ✅ | ✅ |
+| Sub-project worktree under root spec path, addressed `<root>/<alias>` | ✅ | ✅ | ✅ |
+| Sub-project SHA tracking via deployments table (not projects table) | ✅ | ✅ | ✅ |
+| Sub-project teardown when removed from parent config | ✅ | ✅ | ✅ |
+| Recursive recovery of sub-projects on daemon restart | ✅ | ✅ | |
+| Inline sub-project deploy (shares parent worktree) | ✅ | | |
 | **Process supervision** |
 | Service spawning with `sh -c`, working dir = nexus.yaml directory | ✅ | ✅ | ✅ |
 | Environment injection (`NEXUS_PROJECT`, `NEXUS_SHA`, `NEXUS_REF`, `NEXUS_WORKTREE`) | ✅ | ✅ | |
@@ -89,6 +97,7 @@
 | Service restarts on crash, reaches degraded after threshold | ✅ | | |
 | Rollback on failed build (previous services kept running) | ✅ | | |
 | New commit replaces queued SHA during active build | ✅ | | |
-| External nested project deploys independently on its own ref change | ✅ | | |
+| External nested project deploys independently on its own ref change | ✅ | ✅ | ✅ |
+| External sub-project torn down when removed from parent config | ✅ | ✅ | ✅ |
 | Inline project deploys together with parent | ✅ | | |
 | `nexus project add` and `nexus project remove` round-trip | ✅ | | |
