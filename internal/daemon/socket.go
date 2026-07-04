@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 
 	"github.com/rdkal/nexus/internal/config"
 )
@@ -104,30 +105,33 @@ func (d *Daemon) projectHealth(name string, cfg *config.ProjectFile) string {
 // --- handlers ---
 
 func (d *Daemon) handleListProjects(w http.ResponseWriter, r *http.Request) {
-	projects, err := d.DB.ListProjects()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
+	// List every live project keyed by address — root projects and the external
+	// sub-projects discovered from their configs — so the tree is fully observable.
 	d.mu.RLock()
-	defer d.mu.RUnlock()
+	addresses := make([]string, 0, len(d.projects))
+	states := make(map[string]*projectState, len(d.projects))
+	for addr, ps := range d.projects {
+		addresses = append(addresses, addr)
+		states[addr] = ps
+	}
+	d.mu.RUnlock()
 
-	out := make([]projectSummary, 0, len(projects))
-	for _, p := range projects {
-		var cfg *config.ProjectFile
-		if ps, ok := d.projects[p.Name]; ok {
-			ps.mu.RLock()
-			cfg = ps.cfg
-			ps.mu.RUnlock()
+	sort.Strings(addresses)
+
+	out := make([]projectSummary, 0, len(addresses))
+	for _, addr := range addresses {
+		ps := states[addr]
+		ps.mu.RLock()
+		cfg := ps.cfg
+		summary := projectSummary{
+			Name:       ps.address,
+			SpecPath:   ps.specPath,
+			Ref:        ps.ref,
+			CurrentSHA: ps.sha,
 		}
-		out = append(out, projectSummary{
-			Name:       p.Name,
-			SpecPath:   p.SpecPath,
-			Ref:        p.Ref,
-			CurrentSHA: p.CurrentSHA,
-			Health:     d.projectHealth(p.Name, cfg),
-		})
+		ps.mu.RUnlock()
+		summary.Health = d.projectHealth(addr, cfg)
+		out = append(out, summary)
 	}
 	writeJSON(w, out)
 }

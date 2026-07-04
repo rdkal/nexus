@@ -210,15 +210,34 @@ func (d *DB) ListDeployments(address string, limit int) ([]Deployment, error) {
 	return out, rows.Err()
 }
 
-// SetCurrentSHA records the active SHA for a project after a successful deployment.
+// SetCurrentSHA records the active SHA for a root project after a successful
+// deployment. Nested (external sub-)projects have no row in the projects table —
+// they are discovered from their parent's config, not tracked independently — so
+// a no-match is not an error; their active SHA is derived from the deployments
+// table via CurrentSHA instead.
 func (d *DB) SetCurrentSHA(name, sha string) error {
-	res, err := d.conn.Exec(`UPDATE projects SET current_sha = ? WHERE name = ?`, sha, name)
+	_, err := d.conn.Exec(`UPDATE projects SET current_sha = ? WHERE name = ?`, sha, name)
 	if err != nil {
 		return fmt.Errorf("set sha for %q: %w", name, err)
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return fmt.Errorf("project %q not found", name)
-	}
 	return nil
+}
+
+// CurrentSHA returns the SHA of the most recent active deployment for an address,
+// or "" if the address has never had a successful deployment. This is the source
+// of truth for a nested project's deployed SHA on recovery, since such projects
+// are not stored in the projects table.
+func (d *DB) CurrentSHA(address string) (string, error) {
+	var sha string
+	err := d.conn.QueryRow(
+		`SELECT sha FROM deployments WHERE address = ? AND status = 'active'
+		 ORDER BY started_at DESC, id DESC LIMIT 1`, address,
+	).Scan(&sha)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("current sha for %q: %w", address, err)
+	}
+	return sha, nil
 }

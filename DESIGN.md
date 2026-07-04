@@ -614,6 +614,18 @@ sending requests to `nexus-pm.sock`. The runtime holds no OS process handles.
 
 The runtime never binds a public network port.
 
+**Nested projects at runtime.** Each project — root or external sub-project — runs the same
+poller + deploy-loop pair, keyed by resource address (`my-system`, `my-system/db`). After a
+project deploys, the runtime reconciles the external sub-projects declared in its freshly
+deployed `nexus.yaml`: newly declared ones are cloned and get their own poller/deploy-loop
+(so they track their own ref independently); ones dropped from the config have their services
+stopped and their loops cancelled, recursively. A sub-project's worktree is placed under the
+root deployment's repo dir (`repos/<root-spec>/<alias>/worktrees/<sha>`) via the deploy
+request's alias chain. Root projects persist their active SHA in the `projects` table; sub-projects
+are not stored there (they are discovered from a parent's config, not managed independently),
+so their active SHA is derived from the latest `active` row in the `deployments` table.
+Inline sub-projects (no `src:`, sharing the parent worktree) are not yet implemented.
+
 ### nexus-web (Python)
 
 The web UI is written in Python using [iris](https://rdkal.github.io/iris). It is an **optional**

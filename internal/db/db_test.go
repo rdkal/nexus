@@ -91,6 +91,59 @@ func TestSetCurrentSHA(t *testing.T) {
 	}
 }
 
+func TestSetCurrentSHA_NoRootRowIsNoop(t *testing.T) {
+	d := openDB(t)
+	// A nested project has no projects-table row; SetCurrentSHA must not error.
+	if err := d.SetCurrentSHA("my-system/db", "abc123"); err != nil {
+		t.Errorf("SetCurrentSHA for non-root address should be a no-op, got: %v", err)
+	}
+}
+
+func TestCurrentSHA_FromDeployments(t *testing.T) {
+	d := openDB(t)
+
+	// No deployments yet → empty.
+	sha, err := d.CurrentSHA("my-system/db")
+	if err != nil {
+		t.Fatalf("CurrentSHA: %v", err)
+	}
+	if sha != "" {
+		t.Errorf("expected empty sha, got %q", sha)
+	}
+
+	finish := func(id int64, status string, at int64) {
+		t.Helper()
+		if err := d.FinishDeployment(id, status, time.Unix(at, 0)); err != nil {
+			t.Fatalf("FinishDeployment(%d, %s): %v", id, status, err)
+		}
+	}
+
+	// A failed deployment must not count as current.
+	id1, _ := d.AddDeployment("my-system/db", "bad111", time.Unix(100, 0))
+	finish(id1, "failed", 101)
+
+	// An active deployment becomes current.
+	id2, _ := d.AddDeployment("my-system/db", "good222", time.Unix(200, 0))
+	finish(id2, "active", 201)
+
+	sha, err = d.CurrentSHA("my-system/db")
+	if err != nil {
+		t.Fatalf("CurrentSHA: %v", err)
+	}
+	if sha != "good222" {
+		t.Errorf("CurrentSHA = %q, want good222", sha)
+	}
+
+	// A newer active deployment supersedes the previous one.
+	id3, _ := d.AddDeployment("my-system/db", "good333", time.Unix(300, 0))
+	finish(id3, "active", 301)
+
+	sha, _ = d.CurrentSHA("my-system/db")
+	if sha != "good333" {
+		t.Errorf("CurrentSHA = %q, want good333 (newest active)", sha)
+	}
+}
+
 func TestPersistenceAcrossReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nexus.db")
 

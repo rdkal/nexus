@@ -283,6 +283,53 @@ class NexusFixture:
             time.sleep(1)
         raise TimeoutError(f"project {project!r} not deployed within {timeout}s")
 
+    def list_summary(self, address: str) -> dict | None:
+        """Return the /projects list entry for a given address, or None.
+
+        Works for nested addresses (e.g. "root/db") which cannot be fetched via
+        the parametric /projects/{name} route.
+        """
+        projects = self.client.list_projects()
+        if not isinstance(projects, list):
+            return None
+        for p in projects:
+            if p.get("name") == address:
+                return p
+        return None
+
+    def wait_for_list_entry(
+        self, address: str, timeout: float = 45.0, healthy: bool = False
+    ) -> dict:
+        """Block until address appears in /projects (optionally healthy with a SHA)."""
+        deadline = time.monotonic() + timeout
+        last = None
+        while time.monotonic() < deadline:
+            try:
+                last = self.list_summary(address)
+                if last is not None:
+                    if not healthy:
+                        return last
+                    if last.get("current_sha") and last.get("health") == "healthy":
+                        return last
+            except Exception:
+                pass
+            time.sleep(1)
+        raise TimeoutError(
+            f"address {address!r} not present/healthy within {timeout}s (last={last})"
+        )
+
+    def wait_for_list_gone(self, address: str, timeout: float = 45.0):
+        """Block until address is no longer present in /projects."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                if self.list_summary(address) is None:
+                    return
+            except Exception:
+                pass
+            time.sleep(1)
+        raise TimeoutError(f"address {address!r} still present after {timeout}s")
+
     def wait_for_project_sha(self, project: str, sha: str, timeout: float = 60.0):
         """Block until the project's current_sha equals sha.
 
