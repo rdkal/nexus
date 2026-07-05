@@ -133,3 +133,82 @@ projects:
 		t.Error("wrong run command for inline worker service")
 	}
 }
+
+func TestFlatten_InlineAndExternal(t *testing.T) {
+	f, err := config.ParseBytes([]byte(`
+build: make root
+volumes:
+  data: {}
+services:
+  api:
+    run: ./api
+projects:
+  db:                       # external — not recursed into, listed as external
+    src: github.com/community/postgres
+    ref: "@v15"
+  metrics:                  # inline — its build/services join the deployment
+    build: pip install exporter
+    services:
+      exporter:
+        run: ./exporter
+    projects:
+      probe:                # inline nested inside inline
+        services:
+          ping:
+            run: ./ping
+      remote:               # external nested inside inline
+        src: github.com/community/remote
+`))
+	if err != nil {
+		t.Fatalf("ParseBytes: %v", err)
+	}
+
+	units, external := f.Flatten()
+
+	// Units: base (""), metrics, metrics/probe — sorted, base first.
+	wantUnits := []string{"", "metrics", "metrics/probe"}
+	if len(units) != len(wantUnits) {
+		t.Fatalf("expected %d units, got %d: %+v", len(wantUnits), len(units), units)
+	}
+	for i, want := range wantUnits {
+		if got := joinRelForTest(units[i].RelPath); got != want {
+			t.Errorf("unit[%d] rel = %q, want %q", i, got, want)
+		}
+	}
+	// Base unit carries root build/services.
+	if units[0].Build != "make root" || units[0].Services["api"].Run != "./api" {
+		t.Errorf("base unit wrong: %+v", units[0])
+	}
+	// Inline metrics unit carries its own build/services.
+	if units[1].Build != "pip install exporter" || units[1].Services["exporter"].Run != "./exporter" {
+		t.Errorf("metrics unit wrong: %+v", units[1])
+	}
+	if units[2].Services["ping"].Run != "./ping" {
+		t.Errorf("probe unit wrong: %+v", units[2])
+	}
+
+	// External: db (top-level) and metrics/remote (nested in inline) — sorted.
+	wantExt := []string{"db", "metrics/remote"}
+	if len(external) != len(wantExt) {
+		t.Fatalf("expected %d external, got %d: %+v", len(wantExt), len(external), external)
+	}
+	for i, want := range wantExt {
+		if got := joinRelForTest(external[i].RelPath); got != want {
+			t.Errorf("external[%d] rel = %q, want %q", i, got, want)
+		}
+	}
+	if external[0].Src != "github.com/community/postgres" || external[0].Ref != "@v15" {
+		t.Errorf("db external wrong: %+v", external[0])
+	}
+}
+
+func joinRelForTest(rel []string) string {
+	out := ""
+	for i, s := range rel {
+		if i > 0 {
+			out += "/"
+		}
+		out += s
+	}
+	return out
+}

@@ -42,7 +42,9 @@
 | Sub-project SHA tracking via deployments table (not projects table) | ✅ | ✅ | ✅ |
 | Sub-project teardown when removed from parent config | ✅ | ✅ | ✅ |
 | Recursive recovery of sub-projects on daemon restart | ✅ | ✅ | |
-| Inline sub-project deploy (shares parent worktree) | ✅ | | |
+| Inline sub-project deploy (shares parent worktree, atomic with parent) | ✅ | ✅ | ✅ |
+| Config flatten-to-units (inline subtree + external refs) | ✅ | ✅ | ✅ |
+| External sub-projects nested inside inline projects | ✅ | ✅ | |
 | **Process supervision** |
 | Service spawning with `sh -c`, working dir = nexus.yaml directory | ✅ | ✅ | ✅ |
 | Environment injection (`NEXUS_PROJECT`, `NEXUS_SHA`, `NEXUS_REF`, `NEXUS_WORKTREE`) | ✅ | ✅ | |
@@ -99,5 +101,6 @@
 | New commit replaces queued SHA during active build | ✅ | | |
 | External nested project deploys independently on its own ref change | ✅ | ✅ | ✅ |
 | External sub-project torn down when removed from parent config | ✅ | ✅ | ✅ |
-| Inline project deploys together with parent | ✅ | | |
+| Inline project deploys together with parent | ✅ | ✅ | ✅ |
+| Inline project redeploys with parent (new worktree, new PIDs) | ✅ | ✅ | ✅ |
 | `nexus project add` and `nexus project remove` round-trip | ✅ | | |

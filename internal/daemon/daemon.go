@@ -284,35 +284,32 @@ func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 }
 
 // reconcileChildren starts external sub-projects newly declared in cfg and stops
-// those that have been removed. Inline sub-projects (no src:) are not yet handled.
+// those that have been removed. External sub-projects nested inside inline
+// projects are discovered via Flatten and keyed by their relative address (the
+// alias chain from this project), so the diff is stable across nesting levels.
 func (d *Daemon) reconcileChildren(ctx context.Context, ps *projectState, cfg *config.ProjectFile) {
-	desired := make(map[string]config.SubProject)
-	for alias, sub := range cfg.Projects {
-		if sub.IsExternal() {
-			desired[alias] = sub
-		}
+	_, externals := cfg.Flatten()
+	desired := make(map[string]config.ExternalRef, len(externals))
+	for _, ext := range externals {
+		desired[strings.Join(ext.RelPath, "/")] = ext
 	}
 
-	type startReq struct {
-		alias string
-		sub   config.SubProject
-	}
-	var toStart []startReq
+	var toStart []config.ExternalRef
 	var toStop []*projectState
 
 	ps.mu.Lock()
 	if ps.children == nil {
 		ps.children = make(map[string]*projectState)
 	}
-	for alias, sub := range desired {
-		if _, ok := ps.children[alias]; !ok {
-			toStart = append(toStart, startReq{alias, sub})
+	for key, ext := range desired {
+		if _, ok := ps.children[key]; !ok {
+			toStart = append(toStart, ext)
 		}
 	}
-	for alias, child := range ps.children {
-		if _, ok := desired[alias]; !ok {
+	for key, child := range ps.children {
+		if _, ok := desired[key]; !ok {
 			toStop = append(toStop, child)
-			delete(ps.children, alias)
+			delete(ps.children, key)
 		}
 	}
 	ps.mu.Unlock()
@@ -321,19 +318,20 @@ func (d *Daemon) reconcileChildren(ctx context.Context, ps *projectState, cfg *c
 		slog.Info("daemon: removing sub-project", "address", child.address)
 		d.stopProjectState(child)
 	}
-	for _, s := range toStart {
-		d.startChild(ctx, ps, s.alias, s.sub)
+	for _, ext := range toStart {
+		d.startChild(ctx, ps, ext)
 	}
 }
 
 // startChild builds and starts an external sub-project under parent.
-func (d *Daemon) startChild(ctx context.Context, parent *projectState, alias string, sub config.SubProject) {
-	ref := sub.Ref
+func (d *Daemon) startChild(ctx context.Context, parent *projectState, ext config.ExternalRef) {
+	ref := ext.Ref
 	if ref == "" {
 		ref = "@main"
 	}
-	childAddr := parent.address + "/" + alias
-	aliases := append(append([]string{}, parent.aliases...), alias)
+	relKey := strings.Join(ext.RelPath, "/")
+	childAddr := parent.address + "/" + relKey
+	aliases := append(append([]string{}, parent.aliases...), ext.RelPath...)
 
 	sha, err := d.DB.CurrentSHA(childAddr)
 	if err != nil {
@@ -342,7 +340,7 @@ func (d *Daemon) startChild(ctx context.Context, parent *projectState, alias str
 
 	child := &projectState{
 		address:      childAddr,
-		specPath:     sub.Src,
+		specPath:     ext.Src,
 		rootSpecPath: parent.rootSpecPath,
 		ref:          ref,
 		aliases:      aliases,
@@ -355,10 +353,10 @@ func (d *Daemon) startChild(ctx context.Context, parent *projectState, alias str
 	if parent.children == nil {
 		parent.children = make(map[string]*projectState)
 	}
-	parent.children[alias] = child
+	parent.children[relKey] = child
 	parent.mu.Unlock()
 
-	slog.Info("daemon: starting sub-project", "address", childAddr, "src", sub.Src, "ref", ref)
+	slog.Info("daemon: starting sub-project", "address", childAddr, "src", ext.Src, "ref", ref)
 	if err := d.startProjectState(ctx, child); err != nil {
 		slog.Error("daemon: failed to start sub-project", "address", childAddr, "err", err)
 	}
