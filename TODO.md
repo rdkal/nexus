@@ -56,7 +56,7 @@
 | Volume directory creation at `volumes/<address>/` on first use | ✅ | ✅ | |
 | **State persistence** |
 | `nexus.db` SQLite schema (projects, deployments, service state) | ✅ | ✅ | ✅ |
-| Full state recovery from `nexus.db` on daemon restart | ✅ | ✅ | |
+| Full state recovery from `nexus.db` on daemon restart (incl. inline services) | ✅ | ✅ | |
 | Concurrency-safe DB (WAL, busy_timeout, single writer) | ✅ | ✅ | ✅ |
 | Idempotent worktree checkout (survives interrupted deploys) | ✅ | ✅ | ✅ |
 | **Daemon socket** |
@@ -66,8 +66,9 @@
 | `GET /projects/<address>/history` — deployment history | ✅ | ✅ | ✅ |
 | `POST /projects/<address>/redeploy` — re-run build + restart at current SHA | ✅ | ✅ | ✅ |
 | `GET /projects/<address>/services` — list services and status | ✅ | ✅ | ✅ |
-| `GET /projects/<address>/services/<name>/log` — stream service log | ✅ | ✅ | |
+| `GET /projects/<address>/services/<name>/log` — stream service log | ✅ | ✅ | ✅ |
 | `POST /projects/<address>/services/<name>/restart` — manual restart | ✅ | ✅ | ✅ |
+| Nested-address routing (slashed addresses/inline service names) | ✅ | ✅ | ✅ |
 | **Self-update** |
 | Build script: compile Go binary, atomic swap to `$NEXUS_HOME/bin/nexus` | ✅ | ✅ | ✅ |
 | `nexus.yaml` self-tracking config (build-only, no services) | ✅ | ✅ | ✅ |
@@ -103,4 +104,6 @@
 | External sub-project torn down when removed from parent config | ✅ | ✅ | ✅ |
 | Inline project deploys together with parent | ✅ | ✅ | ✅ |
 | Inline project redeploys with parent (new worktree, new PIDs) | ✅ | ✅ | ✅ |
+| Nested project detail + history over socket | ✅ | ✅ | ✅ |
+| Inline service log + restart over socket | ✅ | ✅ | ✅ |
 | `nexus project add` and `nexus project remove` round-trip | ✅ | | |
