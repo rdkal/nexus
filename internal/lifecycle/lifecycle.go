@@ -68,7 +68,7 @@ type Request struct {
 	Aliases      []string // alias chain from root to this project; nil for root projects
 
 	// Deployment SHAs
-	NewSHA string
+	NewSHA  string
 	PrevSHA string // empty on first deployment
 
 	// PrevConfig is the parsed nexus.yaml of the currently-running deployment.
@@ -80,6 +80,13 @@ type Request struct {
 // Deploy runs the full deployment lifecycle:
 //
 //	FETCH → CHECKOUT → BUILD → SHUTDOWN → STARTUP → VERIFY → PROMOTE → CLEANUP
+//
+// The project and its inline sub-projects (projects: entries without a src:) are
+// flattened into units and deployed atomically: all builds run, then all old
+// services stop, all new services start, and all are verified together. Inline
+// units share this deployment's worktree; their services are addressed
+// <address>/<alias>/<service>. External sub-projects are handled separately by
+// the daemon and are not part of this deployment.
 //
 // On build failure the new worktree is removed and previous services are left running.
 // On verify failure ROLLBACK stops new services and restores previous services.
@@ -141,11 +148,17 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 		}
 	}
 
-	// LOAD CONFIG from the new worktree.
+	// LOAD CONFIG from the new worktree and flatten it (plus the previous config)
+	// into inline units to deploy atomically.
 	cfg, err := loadConfig(newWorktree)
 	if err != nil {
 		removeNewWorktree()
 		return fmt.Errorf("load config: %w", err)
+	}
+	newUnits, _ := cfg.Flatten()
+	var prevUnits []config.InlineUnit
+	if req.PrevConfig != nil {
+		prevUnits, _ = req.PrevConfig.Flatten()
 	}
 
 	// RECORD: open a deployment record in the DB.
@@ -155,49 +168,45 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 		return fmt.Errorf("record deployment: %w", err)
 	}
 
-	// BUILD (skipped when nexus.yaml has no build: field).
-	if cfg.Build != "" {
-		svcEnv := d.serviceEnv(req, cfg, newWorktree)
-		buildLog := d.Paths.BuildLog(req.Address, req.NewSHA)
-		if err := runBuild(cfg.Build, newWorktree, svcEnv, buildLog); err != nil {
+	// BUILD each unit that declares one (skipped when no build: field). All builds
+	// run in the shared worktree, in deterministic (sorted) unit order.
+	for _, u := range newUnits {
+		if u.Build == "" {
+			continue
+		}
+		uAddr := unitAddress(req.Address, u.RelPath)
+		env := d.unitEnv(uAddr, req.Ref, req.NewSHA, newWorktree, u.Volumes)
+		buildLog := d.Paths.BuildLog(uAddr, req.NewSHA)
+		if err := runBuild(u.Build, newWorktree, env, buildLog); err != nil {
 			removeNewWorktree()
 			_ = d.DB.FinishDeployment(depID, "failed", time.Now())
-			return fmt.Errorf("build: %w", err)
+			return fmt.Errorf("build %s: %w", uAddr, err)
 		}
 	}
 
-	svcEnv := d.serviceEnv(req, cfg, newWorktree)
+	// SHUTDOWN: stop all services of the current deployment (across all units) in parallel.
+	d.stopUnits(req.Address, prevUnits)
 
-	// SHUTDOWN: stop all services of the current deployment in parallel.
-	if req.PrevConfig != nil {
-		var wg sync.WaitGroup
-		for name := range req.PrevConfig.Services {
-			wg.Add(1)
-			name := name
-			go func() {
-				defer wg.Done()
-				d.Sup.Stop(serviceKey(req.Address, name))
-			}()
+	// STARTUP: spawn services for every unit from the new worktree.
+	for _, u := range newUnits {
+		uAddr := unitAddress(req.Address, u.RelPath)
+		env := d.unitEnv(uAddr, req.Ref, req.NewSHA, newWorktree, u.Volumes)
+		for name, svc := range u.Services {
+			key := serviceKey(uAddr, name)
+			d.Sup.Spawn(key, supervisor.ServiceSpec{
+				Command: svc.Run,
+				WorkDir: newWorktree,
+				Env:     env,
+				LogFile: d.Paths.ServiceLog(key),
+			})
 		}
-		wg.Wait()
-	}
-
-	// STARTUP: spawn services from the new worktree.
-	for name, svc := range cfg.Services {
-		key := serviceKey(req.Address, name)
-		d.Sup.Spawn(key, supervisor.ServiceSpec{
-			Command: svc.Run,
-			WorkDir: newWorktree,
-			Env:     svcEnv,
-			LogFile: d.Paths.ServiceLog(key),
-		})
 	}
 
 	// VERIFY: observe services for VerifyWindow; any crash triggers rollback.
-	if err := d.verify(cfg, req.Address); err != nil {
+	if err := d.verify(newUnits, req.Address); err != nil {
 		slog.Warn("deploy: verify failed, rolling back",
 			"address", req.Address, "sha", req.NewSHA, "err", err)
-		d.rollback(req, cfg, prevWorktree, removeNewWorktree)
+		d.rollback(req, newUnits, prevUnits, prevWorktree, removeNewWorktree)
 		_ = d.DB.FinishDeployment(depID, "rolled_back", time.Now())
 		return fmt.Errorf("verify: %w", err)
 	}
@@ -225,33 +234,27 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 // redeploy, where the "new" and "previous" worktree are the same live checkout.
 func (d *Deployer) rollback(
 	req Request,
-	newCfg *config.ProjectFile,
+	newUnits, prevUnits []config.InlineUnit,
 	prevWorktree string,
 	removeNewWorktree func(),
 ) {
-	// Stop new (failed) services.
-	var wg sync.WaitGroup
-	for name := range newCfg.Services {
-		wg.Add(1)
-		name := name
-		go func() {
-			defer wg.Done()
-			d.Sup.Stop(serviceKey(req.Address, name))
-		}()
-	}
-	wg.Wait()
+	// Stop new (failed) services across all units.
+	d.stopUnits(req.Address, newUnits)
 
-	// Re-spawn old services from the previous worktree.
-	if req.PrevConfig != nil && prevWorktree != "" {
-		oldEnv := d.prevServiceEnv(req, prevWorktree)
-		for name, svc := range req.PrevConfig.Services {
-			key := serviceKey(req.Address, name)
-			d.Sup.Spawn(key, supervisor.ServiceSpec{
-				Command: svc.Run,
-				WorkDir: prevWorktree,
-				Env:     oldEnv,
-				LogFile: d.Paths.ServiceLog(key),
-			})
+	// Re-spawn old services (across all units) from the previous worktree.
+	if prevWorktree != "" {
+		for _, u := range prevUnits {
+			uAddr := unitAddress(req.Address, u.RelPath)
+			env := d.unitEnv(uAddr, req.Ref, req.PrevSHA, prevWorktree, u.Volumes)
+			for name, svc := range u.Services {
+				key := serviceKey(uAddr, name)
+				d.Sup.Spawn(key, supervisor.ServiceSpec{
+					Command: svc.Run,
+					WorkDir: prevWorktree,
+					Env:     env,
+					LogFile: d.Paths.ServiceLog(key),
+				})
+			}
 		}
 	}
 
@@ -259,17 +262,38 @@ func (d *Deployer) rollback(
 	removeNewWorktree()
 }
 
-// verify polls all service statuses for VerifyWindow. Returns an error if any service
-// crashes (Restarts > 0) or becomes degraded within the window.
-func (d *Deployer) verify(cfg *config.ProjectFile, address string) error {
-	if len(cfg.Services) == 0 {
+// stopUnits stops every service across the given units, in parallel.
+func (d *Deployer) stopUnits(base string, units []config.InlineUnit) {
+	var wg sync.WaitGroup
+	for _, u := range units {
+		uAddr := unitAddress(base, u.RelPath)
+		for name := range u.Services {
+			wg.Add(1)
+			key := serviceKey(uAddr, name)
+			go func(k string) {
+				defer wg.Done()
+				d.Sup.Stop(k)
+			}(key)
+		}
+	}
+	wg.Wait()
+}
+
+// verify polls all service statuses (across all units) for VerifyWindow. Returns an
+// error if any service crashes (Restarts > 0) or becomes degraded within the window.
+func (d *Deployer) verify(units []config.InlineUnit, base string) error {
+	total := 0
+	for _, u := range units {
+		total += len(u.Services)
+	}
+	if total == 0 {
 		return nil
 	}
+
 	window := d.VerifyWindow
 	if window == 0 {
 		window = 5 * time.Second
 	}
-
 	tickEvery := d.VerifyTickEvery
 	if tickEvery == 0 {
 		tickEvery = 100 * time.Millisecond
@@ -285,49 +309,50 @@ func (d *Deployer) verify(cfg *config.ProjectFile, address string) error {
 		case <-deadline.C:
 			return nil
 		case <-tick.C:
-			for name := range cfg.Services {
-				key := serviceKey(address, name)
-				st, ok := d.Sup.Status(key)
-				if !ok {
-					return fmt.Errorf("service %q disappeared", key)
-				}
-				if st.Restarts > 0 {
-					return fmt.Errorf("service %q crashed (restarts=%d)", key, st.Restarts)
-				}
-				if st.Degraded {
-					return fmt.Errorf("service %q degraded", key)
+			for _, u := range units {
+				uAddr := unitAddress(base, u.RelPath)
+				for name := range u.Services {
+					key := serviceKey(uAddr, name)
+					st, ok := d.Sup.Status(key)
+					if !ok {
+						return fmt.Errorf("service %q disappeared", key)
+					}
+					if st.Restarts > 0 {
+						return fmt.Errorf("service %q crashed (restarts=%d)", key, st.Restarts)
+					}
+					if st.Degraded {
+						return fmt.Errorf("service %q degraded", key)
+					}
 				}
 			}
 		}
 	}
 }
 
-// serviceEnv builds the environment for newly deployed services.
-// It inherits the host environment and appends NEXUS_* variables and volume paths.
-func (d *Deployer) serviceEnv(req Request, cfg *config.ProjectFile, worktree string) []string {
+// unitEnv builds the environment for a unit's services: the host environment plus
+// NEXUS_* variables and the unit's volume paths (namespaced by the unit's address).
+func (d *Deployer) unitEnv(address, ref, sha, worktree string, volumes map[string]struct{}) []string {
 	env := append(os.Environ(),
-		"NEXUS_PROJECT="+req.Address,
-		"NEXUS_SHA="+req.NewSHA,
-		"NEXUS_REF="+req.Ref,
+		"NEXUS_PROJECT="+address,
+		"NEXUS_SHA="+sha,
+		"NEXUS_REF="+ref,
 		"NEXUS_WORKTREE="+worktree,
 	)
-	for name := range cfg.Volumes {
+	for name := range volumes {
 		upper := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
-		volPath := d.Paths.VolumeDir(req.Address, name)
+		volPath := d.Paths.VolumeDir(address, name)
 		_ = os.MkdirAll(volPath, 0o755)
 		env = append(env, "NEXUS_VOLUME_"+upper+"="+volPath)
 	}
 	return env
 }
 
-// prevServiceEnv builds the environment for services being re-spawned during rollback.
-func (d *Deployer) prevServiceEnv(req Request, prevWorktree string) []string {
-	return append(os.Environ(),
-		"NEXUS_PROJECT="+req.Address,
-		"NEXUS_SHA="+req.PrevSHA,
-		"NEXUS_REF="+req.Ref,
-		"NEXUS_WORKTREE="+prevWorktree,
-	)
+// unitAddress joins a base address with a unit's relative alias chain.
+func unitAddress(base string, rel []string) string {
+	if len(rel) == 0 {
+		return base
+	}
+	return base + "/" + strings.Join(rel, "/")
 }
 
 // serviceKey combines a resource address and service name into a supervisor key.

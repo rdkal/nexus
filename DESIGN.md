@@ -624,7 +624,16 @@ root deployment's repo dir (`repos/<root-spec>/<alias>/worktrees/<sha>`) via the
 request's alias chain. Root projects persist their active SHA in the `projects` table; sub-projects
 are not stored there (they are discovered from a parent's config, not managed independently),
 so their active SHA is derived from the latest `active` row in the `deployments` table.
-Inline sub-projects (no `src:`, sharing the parent worktree) are not yet implemented.
+
+**Inline sub-projects.** A `projects:` entry without a `src:` is inline: it shares the parent's
+worktree and deploys atomically with it, rather than getting its own repo, ref, and poller. At
+deploy time the parent's config is *flattened* into units — the parent plus every inline
+descendant — and the whole lifecycle operates on that set: every unit's build runs (in the
+shared worktree), then all old services stop, all new services start, and all are verified
+together, so an inline service crash rolls the entire deployment back. An inline unit's services
+are addressed `<parent>/<alias>/<service>` and its volumes namespaced by that address, but it has
+no independent SHA or global name. Flattening also surfaces external sub-projects nested inside
+inline ones, which the runtime still deploys independently (keyed by their relative address).
 
 ### nexus-web (Python)
 

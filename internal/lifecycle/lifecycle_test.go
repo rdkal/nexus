@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -456,6 +457,73 @@ func TestDeploy_RedeploySameSHA(t *testing.T) {
 	projects, _ := dep.DB.(*db.DB).ListProjects()
 	if len(projects) == 0 || projects[0].CurrentSHA != "abc123" {
 		t.Errorf("CurrentSHA should remain abc123; projects = %v", projects)
+	}
+}
+
+// TestDeploy_InlineSubproject verifies that a project's inline sub-projects deploy
+// atomically with it: their builds run and their services start under nested
+// addresses, all from the shared worktree.
+func TestDeploy_InlineSubproject(t *testing.T) {
+	cfg := &config.ProjectFile{
+		Build:    "make root",
+		Services: map[string]config.Service{"api": {Run: "./api"}},
+		Projects: map[string]config.SubProject{
+			"metrics": {
+				Build:    "make metrics",
+				Services: map[string]config.Service{"exporter": {Run: "./exporter"}},
+			},
+		},
+	}
+	sup := &mockSupervisor{
+		statuses: map[string]supervisor.Status{
+			"my-system/api":              {Running: true},
+			"my-system/metrics/exporter": {Running: true},
+		},
+	}
+	dep := newDeployer(t, sup, cfg, nil)
+
+	var builtLogs []string
+	dep.RunBuild = func(_, _ string, _ []string, logFile string) error {
+		builtLogs = append(builtLogs, logFile)
+		return nil
+	}
+
+	must(t, dep.DB.(*db.DB).AddProject(db.Project{
+		Name: "my-system", SpecPath: "github.com/myorg/my-system", Ref: "@main",
+	}))
+
+	if err := dep.Deploy(context.Background(), lifecycle.Request{
+		Name:         "my-system",
+		Address:      "my-system",
+		Ref:          "@main",
+		SpecPath:     "github.com/myorg/my-system",
+		RootSpecPath: "github.com/myorg/my-system",
+		NewSHA:       "abc123",
+	}); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+
+	// Both the root and inline services must be spawned under nested addresses.
+	spawned := map[string]bool{}
+	for _, n := range sup.spawnNames() {
+		spawned[n] = true
+	}
+	for _, key := range []string{"my-system/api", "my-system/metrics/exporter"} {
+		if !spawned[key] {
+			t.Errorf("service %q not spawned; got %v", key, sup.spawnNames())
+		}
+	}
+
+	// Both build steps must have run (root and inline), logged under their addresses.
+	joined := strings.Join(builtLogs, "\n")
+	if len(builtLogs) != 2 {
+		t.Errorf("expected 2 builds (root + metrics), got %d: %v", len(builtLogs), builtLogs)
+	}
+	if !strings.Contains(joined, filepath.Join("my-system", "abc123-build.log")) {
+		t.Errorf("root build log missing; logs=%v", builtLogs)
+	}
+	if !strings.Contains(joined, filepath.Join("my-system", "metrics", "abc123-build.log")) {
+		t.Errorf("inline metrics build log missing; logs=%v", builtLogs)
 	}
 }
 

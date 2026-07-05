@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/rdkal/nexus/internal/config"
 )
@@ -86,20 +87,38 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func (d *Daemon) projectHealth(name string, cfg *config.ProjectFile) string {
+func (d *Daemon) projectHealth(address string, cfg *config.ProjectFile) string {
 	if cfg == nil {
 		return "not_deployed"
 	}
-	if len(cfg.Services) == 0 {
+	// Health spans the project and its inline sub-projects, whose services deploy
+	// together with it under nested addresses.
+	units, _ := cfg.Flatten()
+	total := 0
+	for _, u := range units {
+		total += len(u.Services)
+	}
+	if total == 0 {
 		return "no_services"
 	}
-	for svcName := range cfg.Services {
-		st, ok := d.Sup.Status(serviceKey(name, svcName))
-		if !ok || !st.Running || st.Degraded {
-			return "degraded"
+	for _, u := range units {
+		uAddr := subAddress(address, u.RelPath)
+		for svcName := range u.Services {
+			st, ok := d.Sup.Status(serviceKey(uAddr, svcName))
+			if !ok || !st.Running || st.Degraded {
+				return "degraded"
+			}
 		}
 	}
 	return "healthy"
+}
+
+// subAddress joins a base address with a unit's relative alias chain.
+func subAddress(base string, rel []string) string {
+	if len(rel) == 0 {
+		return base
+	}
+	return base + "/" + strings.Join(rel, "/")
 }
 
 // --- handlers ---
@@ -238,19 +257,32 @@ func (d *Daemon) handleListServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out := make([]serviceSummary, 0, len(cfg.Services))
-	for svcName := range cfg.Services {
-		key := serviceKey(name, svcName)
-		st, _ := d.Sup.Status(key)
-		out = append(out, serviceSummary{
-			Name:     svcName,
-			Key:      key,
-			Running:  st.Running,
-			Degraded: st.Degraded,
-			Restarts: st.Restarts,
-			PID:      st.PID,
-		})
+	// Include the project's own services and those of its inline sub-projects.
+	// An inline service's Name is its address relative to this project (e.g.
+	// "metrics/exporter"); Key is the full supervisor key.
+	units, _ := cfg.Flatten()
+	out := make([]serviceSummary, 0)
+	for _, u := range units {
+		uAddr := subAddress(name, u.RelPath)
+		relPrefix := strings.Join(u.RelPath, "/")
+		for svcName := range u.Services {
+			displayName := svcName
+			if relPrefix != "" {
+				displayName = relPrefix + "/" + svcName
+			}
+			key := serviceKey(uAddr, svcName)
+			st, _ := d.Sup.Status(key)
+			out = append(out, serviceSummary{
+				Name:     displayName,
+				Key:      key,
+				Running:  st.Running,
+				Degraded: st.Degraded,
+				Restarts: st.Restarts,
+				PID:      st.PID,
+			})
+		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	writeJSON(w, out)
 }
 
