@@ -15,16 +15,78 @@ import (
 )
 
 // newMux builds the HTTP request multiplexer for the daemon API.
+//
+// Project addresses and inline service names contain slashes (e.g. "root/db",
+// "metrics/exporter"), which Go 1.22's routing can only capture with a trailing
+// {rest...} wildcard. So everything under /projects/ is caught by a single
+// wildcard route per method and dispatched by splitRoute, which classifies the
+// path by its structural suffix (history, redeploy, services, .../log,
+// .../restart). The segments "history", "redeploy" and "services" are therefore
+// reserved as the last path segment on this internal socket.
 func (d *Daemon) newMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /projects", d.handleListProjects)
-	mux.HandleFunc("GET /projects/{name}", d.handleGetProject)
-	mux.HandleFunc("GET /projects/{name}/history", d.handleGetHistory)
-	mux.HandleFunc("POST /projects/{name}/redeploy", d.handleRedeploy)
-	mux.HandleFunc("GET /projects/{name}/services", d.handleListServices)
-	mux.HandleFunc("GET /projects/{name}/services/{svc}/log", d.handleGetLog)
-	mux.HandleFunc("POST /projects/{name}/services/{svc}/restart", d.handleRestartService)
+	mux.HandleFunc("GET /projects/{rest...}", d.handleProjectGet)
+	mux.HandleFunc("POST /projects/{rest...}", d.handleProjectPost)
 	return mux
+}
+
+// splitRoute classifies a path under /projects/ into an action and the addresses
+// it targets. addr is the project's resource address; svc (when present) is the
+// service's address relative to that project. Both may contain slashes.
+func splitRoute(rest string) (action, addr, svc string) {
+	segs := strings.Split(rest, "/")
+	n := len(segs)
+	last := segs[n-1]
+
+	// Service sub-resource: <addr>/services/<svc...>/{log|restart}.
+	if last == "log" || last == "restart" {
+		for i := 1; i <= n-3; i++ {
+			if segs[i] == "services" {
+				return last, strings.Join(segs[:i], "/"), strings.Join(segs[i+1:n-1], "/")
+			}
+		}
+	}
+
+	// Project sub-resource or collection.
+	switch last {
+	case "history", "redeploy", "services":
+		if n >= 2 {
+			return last, strings.Join(segs[:n-1], "/"), ""
+		}
+	}
+
+	return "detail", rest, ""
+}
+
+// handleProjectGet dispatches GET requests under /projects/.
+func (d *Daemon) handleProjectGet(w http.ResponseWriter, r *http.Request) {
+	action, addr, svc := splitRoute(r.PathValue("rest"))
+	switch action {
+	case "detail":
+		d.getProject(w, addr)
+	case "history":
+		d.getHistory(w, addr)
+	case "services":
+		d.listServices(w, addr)
+	case "log":
+		d.getLog(w, addr, svc)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// handleProjectPost dispatches POST requests under /projects/.
+func (d *Daemon) handleProjectPost(w http.ResponseWriter, r *http.Request) {
+	action, addr, svc := splitRoute(r.PathValue("rest"))
+	switch action {
+	case "redeploy":
+		d.redeploy(w, addr)
+	case "restart":
+		d.restartService(w, addr, svc)
+	default:
+		http.NotFound(w, r)
+	}
 }
 
 // ServeHTTP implements http.Handler so the daemon can be used directly in tests.
@@ -155,39 +217,32 @@ func (d *Daemon) handleListProjects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
-func (d *Daemon) handleGetProject(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
+func (d *Daemon) getProject(w http.ResponseWriter, address string) {
+	d.mu.RLock()
+	ps := d.projects[address]
+	d.mu.RUnlock()
 
-	p, err := d.DB.GetProject(name)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+	if ps == nil {
+		http.Error(w, "project not found", http.StatusNotFound)
 		return
 	}
 
-	d.mu.RLock()
-	ps := d.projects[name]
-	d.mu.RUnlock()
-
-	var cfg *config.ProjectFile
-	if ps != nil {
-		ps.mu.RLock()
-		cfg = ps.cfg
-		ps.mu.RUnlock()
+	ps.mu.RLock()
+	summary := projectSummary{
+		Name:       ps.address,
+		SpecPath:   ps.specPath,
+		Ref:        ps.ref,
+		CurrentSHA: ps.sha,
 	}
+	cfg := ps.cfg
+	ps.mu.RUnlock()
 
-	writeJSON(w, projectSummary{
-		Name:       p.Name,
-		SpecPath:   p.SpecPath,
-		Ref:        p.Ref,
-		CurrentSHA: p.CurrentSHA,
-		Health:     d.projectHealth(name, cfg),
-	})
+	summary.Health = d.projectHealth(address, cfg)
+	writeJSON(w, summary)
 }
 
-func (d *Daemon) handleGetHistory(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-
-	deployments, err := d.DB.ListDeployments(name, 50)
+func (d *Daemon) getHistory(w http.ResponseWriter, address string) {
+	deployments, err := d.DB.ListDeployments(address, 50)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -210,11 +265,9 @@ func (d *Daemon) handleGetHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
-func (d *Daemon) handleRedeploy(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-
+func (d *Daemon) redeploy(w http.ResponseWriter, address string) {
 	d.mu.RLock()
-	ps := d.projects[name]
+	ps := d.projects[address]
 	d.mu.RUnlock()
 
 	if ps == nil {
@@ -236,11 +289,9 @@ func (d *Daemon) handleRedeploy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"queued": sha})
 }
 
-func (d *Daemon) handleListServices(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-
+func (d *Daemon) listServices(w http.ResponseWriter, address string) {
 	d.mu.RLock()
-	ps := d.projects[name]
+	ps := d.projects[address]
 	d.mu.RUnlock()
 
 	if ps == nil {
@@ -263,7 +314,7 @@ func (d *Daemon) handleListServices(w http.ResponseWriter, r *http.Request) {
 	units, _ := cfg.Flatten()
 	out := make([]serviceSummary, 0)
 	for _, u := range units {
-		uAddr := subAddress(name, u.RelPath)
+		uAddr := subAddress(address, u.RelPath)
 		relPrefix := strings.Join(u.RelPath, "/")
 		for svcName := range u.Services {
 			displayName := svcName
@@ -286,10 +337,8 @@ func (d *Daemon) handleListServices(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
-func (d *Daemon) handleGetLog(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	svc := r.PathValue("svc")
-	key := serviceKey(name, svc)
+func (d *Daemon) getLog(w http.ResponseWriter, address, svc string) {
+	key := serviceKey(address, svc)
 
 	logPath := d.Paths.ServiceLog(key)
 	f, err := os.Open(logPath)
@@ -309,12 +358,9 @@ func (d *Daemon) handleGetLog(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, f)
 }
 
-func (d *Daemon) handleRestartService(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	svc := r.PathValue("svc")
-
+func (d *Daemon) restartService(w http.ResponseWriter, address, svc string) {
 	d.mu.RLock()
-	ps := d.projects[name]
+	ps := d.projects[address]
 	d.mu.RUnlock()
 
 	if ps == nil {
@@ -331,7 +377,7 @@ func (d *Daemon) handleRestartService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := serviceKey(name, svc)
+	key := serviceKey(address, svc)
 	d.Sup.Stop(key)
 	d.Sup.Spawn(key, spec)
 

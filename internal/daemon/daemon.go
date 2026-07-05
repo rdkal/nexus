@@ -157,18 +157,11 @@ func (d *Daemon) recoverProject(ctx context.Context, ps *projectState) {
 		return
 	}
 
-	env := d.buildEnv(ps.address, ps.ref, cfg, sha, worktree)
-	specs := make(map[string]supervisor.ServiceSpec)
-	for name, svc := range cfg.Services {
-		key := serviceKey(ps.address, name)
-		spec := supervisor.ServiceSpec{
-			Command: svc.Run,
-			WorkDir: worktree,
-			Env:     env,
-			LogFile: d.Paths.ServiceLog(key),
-		}
-		specs[name] = spec
-		d.Sup.Spawn(key, spec)
+	// Recover every service, including those of inline sub-projects, by re-spawning
+	// from the flattened config. Spawn is a no-op for services nexus-pm still runs.
+	specs := d.flattenedSpecs(ps.address, ps.ref, sha, worktree, cfg)
+	for relName, spec := range specs {
+		d.Sup.Spawn(serviceKey(ps.address, relName), spec)
 	}
 
 	ps.mu.Lock()
@@ -239,7 +232,8 @@ func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 			continue
 		}
 
-		// Capture service specs so manual restarts can re-spawn with the same config.
+		// Capture flattened service specs (including inline sub-projects) so manual
+		// restarts can re-spawn with the same config. Deploy already spawned them.
 		newWorktree := d.Paths.WorktreeDir(ps.rootSpecPath, ps.aliases, sha)
 		cfg, reloadErr := config.Parse(filepath.Join(newWorktree, "nexus.yaml"))
 		if reloadErr != nil {
@@ -247,17 +241,7 @@ func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 			cfg = &config.ProjectFile{}
 		}
 
-		env := d.buildEnv(ps.address, ps.ref, cfg, sha, newWorktree)
-		specs := make(map[string]supervisor.ServiceSpec)
-		for name, svc := range cfg.Services {
-			key := serviceKey(ps.address, name)
-			specs[name] = supervisor.ServiceSpec{
-				Command: svc.Run,
-				WorkDir: newWorktree,
-				Env:     env,
-				LogFile: d.Paths.ServiceLog(key),
-			}
-		}
+		specs := d.flattenedSpecs(ps.address, ps.ref, sha, newWorktree, cfg)
 
 		ps.mu.Lock()
 		ps.sha = sha
@@ -412,16 +396,43 @@ func (d *Daemon) restartRuntime(project string) {
 	}
 }
 
-// buildEnv constructs the service environment slice with NEXUS_* variables.
-// address is the project's resource address (used for NEXUS_PROJECT and volume paths).
-func (d *Daemon) buildEnv(address, ref string, cfg *config.ProjectFile, sha, worktree string) []string {
+// flattenedSpecs builds the service specs for a project and its inline sub-projects,
+// keyed by each service's address relative to the project (e.g. "api" or
+// "metrics/exporter"). The full supervisor key is serviceKey(address, relName).
+func (d *Daemon) flattenedSpecs(address, ref, sha, worktree string, cfg *config.ProjectFile) map[string]supervisor.ServiceSpec {
+	units, _ := cfg.Flatten()
+	specs := make(map[string]supervisor.ServiceSpec)
+	for _, u := range units {
+		relPrefix := strings.Join(u.RelPath, "/")
+		uAddr := subAddress(address, u.RelPath)
+		env := d.unitEnv(uAddr, ref, sha, worktree, u.Volumes)
+		for name, svc := range u.Services {
+			relName := name
+			if relPrefix != "" {
+				relName = relPrefix + "/" + name
+			}
+			key := serviceKey(address, relName)
+			specs[relName] = supervisor.ServiceSpec{
+				Command: svc.Run,
+				WorkDir: worktree,
+				Env:     env,
+				LogFile: d.Paths.ServiceLog(key),
+			}
+		}
+	}
+	return specs
+}
+
+// unitEnv constructs the NEXUS_* environment for one unit's services, namespacing
+// volumes by the unit's address.
+func (d *Daemon) unitEnv(address, ref, sha, worktree string, volumes map[string]struct{}) []string {
 	env := append(os.Environ(),
 		"NEXUS_PROJECT="+address,
 		"NEXUS_SHA="+sha,
 		"NEXUS_REF="+ref,
 		"NEXUS_WORKTREE="+worktree,
 	)
-	for name := range cfg.Volumes {
+	for name := range volumes {
 		upper := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
 		volPath := d.Paths.VolumeDir(address, name)
 		_ = os.MkdirAll(volPath, 0o755)

@@ -655,6 +655,14 @@ GET  /projects/<address>/services/<name>/log
 POST /projects/<address>/services/<name>/restart
 ```
 
+`<address>` is a full resource address and may contain slashes (an external
+sub-project like `my-system/db`); `<name>` is a service address relative to that
+project and may itself be nested (an inline sub-project's service like
+`metrics/exporter`). Because Go's router only captures a slash-spanning segment as
+a trailing wildcard, everything under `/projects/` is matched by one wildcard route
+per method and dispatched by structural suffix. The suffixes `history`, `redeploy`,
+and `services` are therefore reserved as the final path segment on this socket.
+
 ### nexus-pm.sock API
 
 The process manager API is used exclusively by the nexus runtime:

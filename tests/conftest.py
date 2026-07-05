@@ -84,6 +84,16 @@ class NexusClient:
         status, body = self._request("POST", f"/projects/{name}/redeploy")
         return status, body
 
+    def get_log(self, address: str, svc: str):
+        _, body = self._request("GET", f"/projects/{address}/services/{svc}/log")
+        return body
+
+    def restart_service(self, address: str, svc: str):
+        status, body = self._request(
+            "POST", f"/projects/{address}/services/{svc}/restart"
+        )
+        return status, body
+
 
 # ---------------------------------------------------------------------------
 # Session fixture: build binaries once
