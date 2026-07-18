@@ -200,3 +200,23 @@ def test_web_actions_restart_and_redeploy(nexus, git_repo, web_server):
     status, body = _http_post(web_server + "/app")
     assert status == 200, body
     assert "Redeploy queued" in body
+
+
+def test_web_build_log_page(nexus, git_repo, web_server):
+    git_repo.commit(
+        {"nexus.yaml": "build: echo BUILD_MARKER_XYZ\nservices:\n  api:\n    run: sleep 3600\n"}
+    )
+    nexus.add_project(git_repo.spec_path, "app")
+    nexus.start()
+    nexus.wait_for_socket()
+    sha = nexus.wait_for_sha("app")
+
+    # The project page's history links each SHA to its build log.
+    status, body = _http_get(web_server + "/app")
+    assert status == 200, body
+    assert f"/app/builds/{sha}" in body
+
+    # The build-log page shows the captured build output.
+    status, body = _http_get(web_server + f"/app/builds/{sha}")
+    assert status == 200, body
+    assert "Build log" in body and "BUILD_MARKER_XYZ" in body

@@ -146,7 +146,7 @@ def project_page(address: str, project: dict, history: list[dict], services: lis
             h.h2["Services"],
             _services_table(address, services),
             h.h2["History"],
-            _history_table(history),
+            _history_table(address, history),
         ]
     )
 
@@ -168,14 +168,16 @@ def _services_table(address: str, services: list[dict]):
     return Table(headers=["Service", "Status", "PID", "Restarts"], rows=rows)
 
 
-def _history_table(history: list[dict]):
+def _history_table(address: str, history: list[dict]):
     if not history:
         return Empty(title="No deployments")
     rows = []
     for d in history:
+        sha = d.get("sha", "")
+        sha_cell = h.a(href=f"/{address}/builds/{sha}")[h.code[_short(sha)]] if sha else "—"
         rows.append(
             [
-                h.code[_short(d.get("sha", ""))],
+                sha_cell,
                 _status_badge(d.get("status", "")),
                 _fmt_time(d.get("started_at")),
             ]
@@ -236,6 +238,26 @@ def _action_button(label: str, url: str):
 
 def action_banner(message: str, ok: bool = True):
     return Banner(".success" if ok else ".danger")[message]
+
+
+def build_log_page(address: str, sha: str, log: str):
+    # Breadcrumbs: every part of the project address is a link, then this build.
+    parts = address.split("/")
+    items: list = [("nexus", "/")]
+    acc = ""
+    for i, part in enumerate(parts):
+        acc = part if i == 0 else acc + "/" + part
+        items.append((part, "/" + acc))
+    items.append("build " + _short(sha))
+
+    return _shell(
+        Stack[
+            Breadcrumbs(items=items),
+            h.h1["Build log"],
+            Row[h.code[_short(sha)], h.span(class_="muted")[address]],
+            Panel[h.pre(class_="log")[log if log else "(no build log for this deployment)"]],
+        ]
+    )
 
 
 def not_found_page(message: str = "Not found"):

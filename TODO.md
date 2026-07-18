@@ -72,6 +72,7 @@
 | `POST /projects/<address>/redeploy` — re-run build + restart at current SHA | ✅ | ✅ | ✅ |
 | `GET /projects/<address>/services` — list services and status | ✅ | ✅ | ✅ |
 | `GET /projects/<address>/services/<name>/log` — stream service log | ✅ | ✅ | ✅ |
+| `GET /projects/<address>/builds/<sha>/log` — build log for a deployment | ✅ | ✅ | ✅ |
 | `POST /projects/<address>/services/<name>/restart` — manual restart | ✅ | ✅ | ✅ |
 | Nested-address routing (slashed addresses/inline service names) | ✅ | ✅ | ✅ |
 | **Self-update** |
@@ -87,7 +88,7 @@
 | Project detail page `/<address>` — deployment history + services | ✅ | ✅ | ✅ |
 | Service detail page + log (auto-polling tail) | ✅ | ✅ | ✅ |
 | Redeploy / restart actions (fixi POST → banner) | ✅ | ✅ | ✅ |
-| Build-log surfacing on project page (needs new `GET .../builds/<sha>/log` socket route) | | | |
+| Build-log route `GET /projects/<address>/builds/<sha>/log` + web build-log page | ✅ | ✅ | ✅ |
 | **Go unit tests** |
 | Ref parsing (`@branch`, `@tag`, `@latest`) from `git ls-remote` output | ✅ | ✅ | ✅ |
 | Commit queuing logic (latest-wins, replace pending) | ✅ | ✅ | ✅ |

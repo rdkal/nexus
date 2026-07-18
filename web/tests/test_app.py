@@ -40,6 +40,9 @@ class StubClient:
     def get_log(self, address, service):
         return f"log for {address}/{service}\nMARKER_LINE\n"
 
+    def get_build_log(self, address, sha):
+        return f"BUILD_OUTPUT for {address}@{sha}\n"
+
     def redeploy(self, address):
         self.redeployed.append(address)
         return {"queued": "abc123def456"}
@@ -73,6 +76,16 @@ def test_project_page_has_services_and_redeploy():
     assert r.status_code == 200
     assert "metrics/exporter" in r.text
     assert 'fx-action="/app"' in r.text and 'fx-method="post"' in r.text  # redeploy button
+    assert 'href="/app/builds/abc123def456"' in r.text  # history SHA → build log
+
+
+def test_build_log_page():
+    c, _ = _client()
+    r = c.get("/app/builds/abc123def456")
+    assert r.status_code == 200
+    assert "Build log" in r.text and "BUILD_OUTPUT" in r.text
+    # A build-log path under an unknown project is not special-cased → 404.
+    assert c.get("/nope/builds/abc").status_code == 404
 
 
 def test_service_page_and_fx_fragment():

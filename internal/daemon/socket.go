@@ -20,9 +20,10 @@ import (
 // "metrics/exporter"), which Go 1.22's routing can only capture with a trailing
 // {rest...} wildcard. So everything under /projects/ is caught by a single
 // wildcard route per method and dispatched by splitRoute, which classifies the
-// path by its structural suffix (history, redeploy, services, .../log,
-// .../restart). The segments "history", "redeploy" and "services" are therefore
-// reserved as the last path segment on this internal socket.
+// path by its structural suffix (history, redeploy, services, .../services/<svc>/log,
+// .../services/<svc>/restart, .../builds/<sha>/log). The segments "history",
+// "redeploy" and "services" are therefore reserved as the last path segment on
+// this internal socket.
 func (d *Daemon) newMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /projects", d.handleListProjects)
@@ -38,6 +39,13 @@ func splitRoute(rest string) (action, addr, svc string) {
 	segs := strings.Split(rest, "/")
 	n := len(segs)
 	last := segs[n-1]
+
+	// Build log: <addr>/builds/<sha>/log. A SHA has no slashes, so "builds" is
+	// always the third-from-last segment — distinct from a service log's
+	// "services" marker. svc carries the SHA.
+	if last == "log" && n >= 4 && segs[n-3] == "builds" {
+		return "buildlog", strings.Join(segs[:n-3], "/"), segs[n-2]
+	}
 
 	// Service sub-resource: <addr>/services/<svc...>/{log|restart}.
 	if last == "log" || last == "restart" {
@@ -71,6 +79,8 @@ func (d *Daemon) handleProjectGet(w http.ResponseWriter, r *http.Request) {
 		d.listServices(w, addr)
 	case "log":
 		d.getLog(w, addr, svc)
+	case "buildlog":
+		d.getBuildLog(w, addr, svc) // svc carries the SHA
 	default:
 		http.NotFound(w, r)
 	}
@@ -338,17 +348,24 @@ func (d *Daemon) listServices(w http.ResponseWriter, address string) {
 }
 
 func (d *Daemon) getLog(w http.ResponseWriter, address, svc string) {
-	key := serviceKey(address, svc)
+	serveLogFile(w, d.Paths.ServiceLog(serviceKey(address, svc)))
+}
 
-	logPath := d.Paths.ServiceLog(key)
-	f, err := os.Open(logPath)
+// getBuildLog serves the build log for a deployment SHA. svc is the SHA.
+func (d *Daemon) getBuildLog(w http.ResponseWriter, address, sha string) {
+	serveLogFile(w, d.Paths.BuildLog(address, sha))
+}
+
+// serveLogFile streams a log file as text/plain, tailing the last 64 KiB of a
+// large file. A missing file is a 404 (e.g. a deployment with no build step).
+func serveLogFile(w http.ResponseWriter, path string) {
+	f, err := os.Open(path)
 	if err != nil {
 		http.Error(w, "log not found", http.StatusNotFound)
 		return
 	}
 	defer f.Close()
 
-	// Seek to the last 64 KiB if the file is large.
 	const tail = 64 * 1024
 	if info, err := f.Stat(); err == nil && info.Size() > tail {
 		_, _ = f.Seek(-tail, io.SeekEnd)

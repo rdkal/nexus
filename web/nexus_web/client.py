@@ -48,6 +48,13 @@ class NexusClient:
         self._check(r)
         return r.text
 
+    def get_build_log(self, address: str, sha: str) -> str:
+        r = self._client.get(f"/projects/{address}/builds/{sha}/log")
+        if r.status_code == 404:
+            return ""
+        self._check(r)
+        return r.text
+
     # --- write endpoints (used by the actions PR; wrapped here for completeness) ---
 
     def redeploy(self, address: str) -> dict:
