@@ -11,6 +11,7 @@ import datetime
 
 from iris import (
     Badge,
+    Banner,
     Breadcrumbs,
     Container,
     Empty,
@@ -22,6 +23,7 @@ from iris import (
     Stat,
     Table,
     h,
+    raw,
 )
 
 from .tree import TreeNode, build_tree
@@ -132,10 +134,14 @@ def project_page(address: str, project: dict, history: list[dict], services: lis
         Stat(label="Current SHA", value=h.code[_short(project.get("current_sha", ""))]),
         Stat(label="Ref", value=project.get("ref", "") or "—"),
     ]
+    # Redeploy re-runs the build + swap at the current SHA. POST to the project's
+    # own URL; fixi swaps the returned banner into #banner.
+    redeploy = _action_button("Redeploy", "/" + address)
     return _shell(
         Stack[
             _crumbs(address),
-            h.h1[address],
+            Row[h.h1[address], redeploy],
+            h.div("#banner"),
             meta,
             h.h2["Services"],
             _services_table(address, services),
@@ -186,27 +192,50 @@ def service_page(address: str, service: str, row: dict | None, log: str):
         Stat(label="PID", value=h.code[(row or {}).get("pid", "") or "—"]),
         Stat(label="Restarts", value=str((row or {}).get("restarts", 0))),
     ]
-    # fixi Refresh button swaps just the log block (fixi has no interval polling).
-    refresh = h.button(
-        class_="refresh",
-        fx_action="/" + full,
-        fx_trigger="click",
-        fx_target="#log",
-        fx_swap="innerHTML",
-    )["Refresh log"]
+    restart = _action_button("Restart", "/" + full)
     return _shell(
         Stack[
             _crumbs(full),
-            h.h1[full],
+            Row[h.h1[full], restart],
+            h.div("#banner"),
             meta,
-            Row[h.h2["Log"], refresh],
+            h.h2["Log"],
             Panel[h.div("#log")[log_fragment(log)]],
+            _log_poller("/" + full),
         ]
     )
 
 
 def log_fragment(log: str):
     return h.pre(class_="log")[log if log else "(no output yet)"]
+
+
+def _log_poller(url: str):
+    # fixi has no interval trigger, so poll the log fragment with a tiny script.
+    # The FX-Request header makes the app return just the <pre>, swapped into #log.
+    script = (
+        "(function(){var u=%r;setInterval(function(){"
+        "fetch(u,{headers:{'FX-Request':'true'}})"
+        ".then(function(r){return r.ok?r.text():null;})"
+        ".then(function(t){var e=document.getElementById('log');"
+        "if(t!==null&&e){e.innerHTML=t;}});},3000);})();"
+    ) % url
+    return h.script[raw(script)]
+
+
+def _action_button(label: str, url: str):
+    return h.button(
+        class_="action",
+        fx_action=url,
+        fx_method="post",
+        fx_trigger="click",
+        fx_target="#banner",
+        fx_swap="innerHTML",
+    )[label]
+
+
+def action_banner(message: str, ok: bool = True):
+    return Banner(".success" if ok else ".danger")[message]
 
 
 def not_found_page(message: str = "Not found"):

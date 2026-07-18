@@ -74,4 +74,34 @@ def create_app(client: NexusClient) -> FastAPI:
             return IrisResponse(views.log_fragment(log))
         return IrisResponse(views.service_page(address, service, row, log))
 
+    @app.post("/{path:path}")
+    def action(path: str) -> IrisResponse:
+        # POST on a page URL performs its action: redeploy a project, restart a
+        # service. The response is a banner fragment fixi swaps into #banner.
+        try:
+            projects = client.list_projects()
+        except NexusError as e:
+            return IrisResponse(views.action_banner(f"daemon unreachable: {e}", ok=False), status_code=502)
+
+        target = tree.resolve(path, {p["name"] for p in projects})
+        if target is None:
+            return IrisResponse(views.action_banner(f"No project or service at /{path}", ok=False), status_code=404)
+
+        try:
+            if target[0] == "project":
+                res = client.redeploy(target[1])
+                return IrisResponse(views.action_banner(f"Redeploy queued: {_short(res.get('queued'))}"))
+            _, address, service = target
+            services = client.list_services(address)
+            if service not in {s["name"] for s in services}:
+                return IrisResponse(views.action_banner(f"No service /{path}", ok=False), status_code=404)
+            res = client.restart(address, service)
+            return IrisResponse(views.action_banner(f"Restarted {res.get('restarted', service)}"))
+        except NexusError as e:
+            return IrisResponse(views.action_banner(str(e), ok=False), status_code=502)
+
     return app
+
+
+def _short(sha) -> str:
+    return sha[:12] if sha else "?"

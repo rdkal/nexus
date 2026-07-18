@@ -10,6 +10,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -40,6 +41,15 @@ def _free_port() -> int:
 def _http_get(url: str, timeout: float = 5.0):
     try:
         with urllib.request.urlopen(url, timeout=timeout) as r:
+            return r.status, r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace")
+
+
+def _http_post(url: str, timeout: float = 5.0):
+    req = urllib.request.Request(url, method="POST", headers={"FX-Request": "true"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode("utf-8", "replace")
@@ -151,3 +161,42 @@ def test_web_renders_project_tree_and_details(nexus, git_repo, web_server):
     # Unknown path → 404 page.
     status, _ = _http_get(web_server + "/does/not/exist")
     assert status == 404
+
+
+def test_web_actions_restart_and_redeploy(nexus, git_repo, web_server):
+    git_repo.commit({"nexus.yaml": APP_YAML})
+    nexus.add_project(git_repo.spec_path, "app")
+    nexus.start()
+    nexus.wait_for_socket()
+    nexus.wait_for_sha("app")
+
+    def exporter():
+        for s in nexus.client.list_services("app"):
+            if s["name"] == "metrics/exporter":
+                return s
+        return None
+
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline and not (exporter() and exporter().get("pid")):
+        time.sleep(0.5)
+    pid1 = exporter()["pid"]
+    assert pid1, "inline service has no PID"
+
+    # Restart the inline service through the web action (POST on its page URL).
+    status, body = _http_post(web_server + "/app/metrics/exporter")
+    assert status == 200, body
+    assert "Restarted" in body
+
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        cur = exporter()
+        if cur and cur.get("pid") and cur["pid"] != pid1:
+            break
+        time.sleep(0.5)
+    else:
+        raise AssertionError(f"service PID did not change after web restart (stayed {pid1})")
+
+    # Redeploy the project through the web action.
+    status, body = _http_post(web_server + "/app")
+    assert status == 200, body
+    assert "Redeploy queued" in body

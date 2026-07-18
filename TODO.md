@@ -80,13 +80,13 @@
 | After self-build deploy, call `POST /runtime/restart` on nexus-pm.sock | ✅ | ✅ | ✅ |
 | Self-identification via spec path (NEXUS_SELF_SPEC override) | ✅ | ✅ | ✅ |
 | **Web UI (Python / iris)** |
-| `nexus-web` as a normal nexus project (`web/nexus.yaml`, `python -m nexus_web`) | ✅ | | |
-| Unix socket HTTP client (httpx over UDS) wrapping the 7 endpoints | ✅ | | |
-| Address-tree build + project-vs-service path resolution | ✅ | | |
-| Overview page `/` — project tree, current SHA, health | ✅ | | |
-| Project detail page `/<address>` — deployment history + services | ✅ | | |
-| Service detail page + live log tail | ✅ | | |
-| Redeploy / restart actions (fixi POST → banner) | ✅ | | |
+| `nexus-web` as a normal nexus project (`web/nexus.yaml`, `python -m nexus_web`) | ✅ | ✅ | |
+| Unix socket HTTP client (httpx over UDS) wrapping the 7 endpoints | ✅ | ✅ | ✅ |
+| Address-tree build + project-vs-service path resolution | ✅ | ✅ | ✅ |
+| Overview page `/` — project tree, current SHA, health | ✅ | ✅ | ✅ |
+| Project detail page `/<address>` — deployment history + services | ✅ | ✅ | ✅ |
+| Service detail page + log (auto-polling tail) | ✅ | ✅ | ✅ |
+| Redeploy / restart actions (fixi POST → banner) | ✅ | ✅ | ✅ |
 | Build-log surfacing on project page (needs new `GET .../builds/<sha>/log` socket route) | | | |
 | **Go unit tests** |
 | Ref parsing (`@branch`, `@tag`, `@latest`) from `git ls-remote` output | ✅ | ✅ | ✅ |
@@ -113,6 +113,7 @@
 | Inline project redeploys with parent (new worktree, new PIDs) | ✅ | ✅ | ✅ |
 | Nested project detail + history over socket | ✅ | ✅ | ✅ |
 | Inline service log + restart over socket | ✅ | ✅ | ✅ |
-| Web UI renders project tree + detail against a live socket | ✅ | | |
+| Web UI renders project tree + detail against a live socket | ✅ | ✅ | ✅ |
+| Web UI redeploy + restart actions against a live socket | ✅ | ✅ | ✅ |
 | Dogfood: nexus deploys `nexus-web` itself and it serves on port 7777 | ✅ | | |
 | `nexus project add` and `nexus project remove` round-trip | ✅ | | |
