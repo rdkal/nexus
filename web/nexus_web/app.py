@@ -44,7 +44,15 @@ def create_app(client: NexusClient) -> FastAPI:
         except NexusError as e:
             return IrisResponse(views.not_found_page(f"daemon unreachable: {e}"), status_code=502)
 
-        target = tree.resolve(path, {p["name"] for p in projects})
+        addresses = {p["name"] for p in projects}
+
+        # Build-log page: /<address>/builds/<sha> (SHA has no slashes).
+        addr, sep, sha = path.partition("/builds/")
+        if sep and sha and "/" not in sha and addr in addresses:
+            log = client.get_build_log(addr, sha)
+            return IrisResponse(views.build_log_page(addr, sha, log))
+
+        target = tree.resolve(path, addresses)
         if target is None:
             return IrisResponse(views.not_found_page(f"No project or service at /{path}"), status_code=404)
 

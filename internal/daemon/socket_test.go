@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -259,5 +261,43 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHandleGetBuildLog(t *testing.T) {
+	d := newTestDaemon(t, &stubSupervisor{})
+
+	path := d.Paths.BuildLog("app", "abc123")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("BUILD_OUTPUT_LINE\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	d.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/projects/app/builds/abc123/log", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "BUILD_OUTPUT_LINE") {
+		t.Errorf("body = %q", rec.Body.String())
+	}
+
+	// A nested address build log also routes correctly.
+	np := d.Paths.BuildLog("root/db", "deadbeef")
+	_ = os.MkdirAll(filepath.Dir(np), 0o755)
+	_ = os.WriteFile(np, []byte("NESTED_BUILD\n"), 0o644)
+	rec = httptest.NewRecorder()
+	d.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/projects/root/db/builds/deadbeef/log", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "NESTED_BUILD") {
+		t.Errorf("nested build log: code=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	// Missing build log → 404.
+	rec = httptest.NewRecorder()
+	d.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/projects/app/builds/nosha/log", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("missing build log should 404, got %d", rec.Code)
 	}
 }

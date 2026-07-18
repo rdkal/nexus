@@ -34,6 +34,9 @@ func TestSplitRoute(t *testing.T) {
 		// service restart
 		{"app/services/api/restart", "restart", "app", "api"},
 		{"app/services/metrics/exporter/restart", "restart", "app", "metrics/exporter"},
+		// build log — SHA carried in the svc slot; distinct from a service log
+		{"app/builds/abc123/log", "buildlog", "app", "abc123"},
+		{"root/db/builds/deadbeef/log", "buildlog", "root/db", "deadbeef"},
 	}
 	for _, c := range cases {
 		action, addr, svc := splitRoute(c.rest)
