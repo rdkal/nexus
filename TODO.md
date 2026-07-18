@@ -25,6 +25,11 @@
 | `@<tag>` ref resolution (exact tag SHA) | ✅ | ✅ | ✅ |
 | `@latest` semver tag resolution (`--sort=-version:refname`) | ✅ | ✅ | ✅ |
 | Commit queuing (latest-wins, one pending SHA per deployment) | ✅ | ✅ | ✅ |
+| **Monorepo support** (many apps in one repo, deployed independently) |
+| Subdirectory spec path — `nexus.yaml` under a repo subpath, not the repo root | | | |
+| Tag-prefix ref matching — track the latest tag with a prefix (e.g. `web-` → `web-v2.1.0`) | | | |
+| Per-app ref isolation — a tag/push for app A must not redeploy app B | | | |
+| Path-scoped change detection for branch refs — redeploy only when the app's subtree changed | | | |
 | **Deployment lifecycle** |
 | CHECKOUT: `git worktree add` at project alias path under root spec-path | ✅ | ✅ | ✅ |
 | BUILD: `sh -c` in nexus.yaml directory, log to `logs/<address>/<sha>-build.log` | ✅ | ✅ | ✅ |
@@ -75,12 +80,14 @@
 | After self-build deploy, call `POST /runtime/restart` on nexus-pm.sock | ✅ | ✅ | ✅ |
 | Self-identification via spec path (NEXUS_SELF_SPEC override) | ✅ | ✅ | ✅ |
 | **Web UI (Python / iris)** |
-| Unix socket HTTP client transport | ✅ | | |
-| Project tree page (`/`) | ✅ | | |
-| Project detail page (`/<project-name>`) | ✅ | | |
-| Nested project / service / volume detail pages | ✅ | | |
-| Live log tail | ✅ | | |
-| Public REST API (proxied from daemon socket) | ✅ | | |
+| `nexus-web` as a normal nexus project (`web/nexus.yaml`, `python -m nexus_web`) | ✅ | | |
+| Unix socket HTTP client (httpx over UDS) wrapping the 7 endpoints | ✅ | | |
+| Address-tree build + project-vs-service path resolution | ✅ | | |
+| Overview page `/` — project tree, current SHA, health | ✅ | | |
+| Project detail page `/<address>` — deployment history + services | ✅ | | |
+| Service detail page + live log tail | ✅ | | |
+| Redeploy / restart actions (fixi POST → banner) | ✅ | | |
+| Build-log surfacing on project page (needs new `GET .../builds/<sha>/log` socket route) | | | |
 | **Go unit tests** |
 | Ref parsing (`@branch`, `@tag`, `@latest`) from `git ls-remote` output | ✅ | ✅ | ✅ |
 | Commit queuing logic (latest-wins, replace pending) | ✅ | ✅ | ✅ |
@@ -106,4 +113,6 @@
 | Inline project redeploys with parent (new worktree, new PIDs) | ✅ | ✅ | ✅ |
 | Nested project detail + history over socket | ✅ | ✅ | ✅ |
 | Inline service log + restart over socket | ✅ | ✅ | ✅ |
+| Web UI renders project tree + detail against a live socket | ✅ | | |
+| Dogfood: nexus deploys `nexus-web` itself and it serves on port 7777 | ✅ | | |
 | `nexus project add` and `nexus project remove` round-trip | ✅ | | |
