@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import GitRepo
+
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 
 APP_YAML = """\
@@ -220,3 +222,64 @@ def test_web_build_log_page(nexus, git_repo, web_server):
     status, body = _http_get(web_server + f"/app/builds/{sha}")
     assert status == 200, body
     assert "Build log" in body and "BUILD_MARKER_XYZ" in body
+
+
+def _web_app_files() -> dict:
+    """The nexus-web package source, as a {path: content} dict for a GitRepo."""
+    files = {}
+    for p in sorted((WEB_DIR / "nexus_web").glob("*.py")):
+        files[f"nexus_web/{p.name}"] = p.read_text()
+    files["requirements.txt"] = (WEB_DIR / "requirements.txt").read_text()
+    return files
+
+
+def test_dogfood_nexus_deploys_web(nexus, tmp_path, web_python):
+    """nexus builds AND runs nexus-web as a normal project — the design's claim.
+
+    Depends on web_python so the build is skipped when the venv can't be built
+    (no network) and so the iris wheel is already in pip's cache, keeping the
+    in-nexus `pip install` fast.
+    """
+    port = _free_port()
+    repo = GitRepo(tmp_path / "webrepo")
+    files = _web_app_files()
+    # Install deps into ./libs and run with PYTHONPATH. (The production
+    # web/nexus.yaml uses a plain venv; here the test's file:// spec path puts a
+    # ':' in the worktree path, which `python -m venv` refuses — real
+    # github.com/... paths have no colon — so --target sidesteps that artifact
+    # while still proving nexus builds and runs the app.)
+    files["nexus.yaml"] = (
+        "build: python3 -m pip install -q --target ./libs -r requirements.txt\n"
+        "services:\n"
+        "  web:\n"
+        f"    run: PYTHONPATH=libs python3 -m nexus_web --socket $NEXUS_HOME/nexus.sock --port {port}\n"
+    )
+    repo.commit(files)
+
+    nexus.add_project(repo.spec_path, "web")
+    nexus.start()
+    nexus.wait_for_socket()
+
+    # The build creates a venv and pip-installs iris from git — allow generous time.
+    try:
+        nexus.wait_for_sha("web", timeout=300)
+    except TimeoutError:
+        logs = sorted((nexus.home / "logs" / "web").glob("*-build.log"))
+        tail = logs[-1].read_text()[-2000:] if logs else "(no build log found)"
+        raise AssertionError(f"web project did not deploy; build log tail:\n{tail}")
+
+    # nexus-web, now supervised by nexus, serves its own dashboard — which lists
+    # itself as the "web" project.
+    base = f"http://127.0.0.1:{port}"
+    deadline = time.monotonic() + 60
+    status, body = 0, ""
+    while time.monotonic() < deadline:
+        try:
+            status, body = _http_get(base + "/", timeout=2.0)
+            if status == 200 and "web" in body:
+                break
+        except Exception:
+            pass
+        time.sleep(1)
+    assert status == 200, f"web UI did not serve on {base}"
+    assert "Projects" in body and "web" in body
