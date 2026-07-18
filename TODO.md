@@ -81,7 +81,7 @@
 | After self-build deploy, call `POST /runtime/restart` on nexus-pm.sock | ✅ | ✅ | ✅ |
 | Self-identification via spec path (NEXUS_SELF_SPEC override) | ✅ | ✅ | ✅ |
 | **Web UI (Python / iris)** |
-| `nexus-web` as a normal nexus project (`web/nexus.yaml`, `python -m nexus_web`) | ✅ | ✅ | |
+| `nexus-web` as a normal nexus project (`web/nexus.yaml`, `python -m nexus_web`) | ✅ | ✅ | ✅ |
 | Unix socket HTTP client (httpx over UDS) wrapping the 7 endpoints | ✅ | ✅ | ✅ |
 | Address-tree build + project-vs-service path resolution | ✅ | ✅ | ✅ |
 | Overview page `/` — project tree, current SHA, health | ✅ | ✅ | ✅ |
@@ -116,5 +116,5 @@
 | Inline service log + restart over socket | ✅ | ✅ | ✅ |
 | Web UI renders project tree + detail against a live socket | ✅ | ✅ | ✅ |
 | Web UI redeploy + restart actions against a live socket | ✅ | ✅ | ✅ |
-| Dogfood: nexus deploys `nexus-web` itself and it serves on port 7777 | ✅ | | |
+| Dogfood: nexus deploys `nexus-web` itself and it serves on port 7777 | ✅ | ✅ | ✅ |
 | `nexus project add` and `nexus project remove` round-trip | ✅ | | |
