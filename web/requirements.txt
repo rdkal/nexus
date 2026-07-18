@@ -1,0 +1,3 @@
+iris-ui[fastapi] @ git+https://github.com/rdkal/iris.git@v0.2.0
+httpx>=0.27
+uvicorn>=0.30

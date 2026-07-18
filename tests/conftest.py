@@ -239,6 +239,14 @@ class NexusFixture:
     def db_path(self) -> Path:
         return self._home / "nexus.db"
 
+    @property
+    def home(self) -> Path:
+        return self._home
+
+    @property
+    def socket_path(self) -> Path:
+        return self._home / "nexus.sock"
+
     def add_project(self, spec_path: str, name: str, ref: str = "@main"):
         """Register a project in the DB before the daemon starts."""
         _add_project_to_db(self.db_path, name, spec_path, ref)

@@ -1,0 +1,4 @@
+build: pip install -r requirements.txt
+services:
+  web:
+    run: python -m nexus_web --socket $NEXUS_HOME/nexus.sock --port 7777
