@@ -250,3 +250,34 @@ func TestResolveRef_Glob(t *testing.T) {
 		t.Error("expected error for a glob matching no tags")
 	}
 }
+
+// TestResolveRepoRoot verifies walk-up discovery: a subdirectory spec path
+// resolves to the enclosing repo plus the in-repo subdir; a plain repo resolves
+// with an empty subdir on the first probe.
+func TestResolveRepoRoot(t *testing.T) {
+	upstream := makeUpstream(t) // a real git repo at <dir>
+	repoURL := "file://" + upstream
+
+	// Plain repo → itself, no subdir.
+	root, subdir, err := git.ResolveRepoRoot(repoURL)
+	if err != nil {
+		t.Fatalf("ResolveRepoRoot(repo): %v", err)
+	}
+	if root != repoURL || subdir != "" {
+		t.Errorf("plain repo = (%q, %q), want (%q, \"\")", root, subdir, repoURL)
+	}
+
+	// Subdirectory path → repo root + subdir.
+	root, subdir, err = git.ResolveRepoRoot(repoURL + "/services/api")
+	if err != nil {
+		t.Fatalf("ResolveRepoRoot(subdir): %v", err)
+	}
+	if root != repoURL || subdir != "services/api" {
+		t.Errorf("subdir path = (%q, %q), want (%q, \"services/api\")", root, subdir, repoURL)
+	}
+
+	// Nonexistent repo → error.
+	if _, _, err := git.ResolveRepoRoot("file:///no/such/repo/here"); err == nil {
+		t.Error("expected error for a nonexistent repo path")
+	}
+}

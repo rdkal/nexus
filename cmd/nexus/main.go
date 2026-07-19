@@ -11,6 +11,7 @@ import (
 
 	"github.com/rdkal/nexus/internal/daemon"
 	"github.com/rdkal/nexus/internal/db"
+	"github.com/rdkal/nexus/internal/git"
 	"github.com/rdkal/nexus/internal/home"
 	"github.com/rdkal/nexus/internal/spec"
 	"github.com/rdkal/nexus/internal/supervisor"
@@ -90,6 +91,18 @@ func projectAddCmd(homeFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+
+			// Discover the git repo within the spec path by walking up (Go-style):
+			// a monorepo app can be given as github.com/org/repo/services/api, which
+			// resolves to repo root github.com/org/repo + subdir services/api. If the
+			// repo can't be probed (offline / auth), assume a repo-root path — the
+			// daemon will surface any real problem when it clones.
+			root, subdir, rerr := git.ResolveRepoRoot(string(specPath))
+			if rerr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not resolve repo root (%v); assuming %q is a repo root\n", rerr, specPath)
+				root, subdir = string(specPath), ""
+			}
+
 			database, err := openDB(*homeFlag)
 			if err != nil {
 				return err
@@ -98,12 +111,17 @@ func projectAddCmd(homeFlag *string) *cobra.Command {
 
 			if err := database.AddProject(db.Project{
 				Name:     name,
-				SpecPath: string(specPath),
+				SpecPath: root,
 				Ref:      refFlag,
+				Subdir:   subdir,
 			}); err != nil {
 				return err
 			}
-			fmt.Printf("added project %q  src=%s  ref=%s\n", name, specPath, refFlag)
+			if subdir != "" {
+				fmt.Printf("added project %q  repo=%s  subdir=%s  ref=%s\n", name, root, subdir, refFlag)
+			} else {
+				fmt.Printf("added project %q  src=%s  ref=%s\n", name, root, refFlag)
+			}
 			return nil
 		},
 	}

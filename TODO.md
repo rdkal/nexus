@@ -25,11 +25,13 @@
 | `@<tag>` ref resolution (exact tag SHA) | ✅ | ✅ | ✅ |
 | `@latest` semver tag resolution (`--sort=-version:refname`) | ✅ | ✅ | ✅ |
 | `@<glob>` wildcard tag ref resolution (highest match) | ✅ | ✅ | ✅ |
+| Repo-root walk-up discovery for subdirectory spec paths (`git ls-remote`) | ✅ | ✅ | ✅ |
 | Commit queuing (latest-wins, one pending SHA per deployment) | ✅ | ✅ | ✅ |
 | **Monorepo support** (many apps in one repo, deployed independently) |
 | Wildcard tag ref `@<glob>` — highest semver tag matching the pattern (any scheme) | ✅ | ✅ | ✅ |
 | Per-app ref isolation — a non-matching (other-app) tag must not redeploy | ✅ | ✅ | ✅ |
-| Subdirectory spec path via walk-up repo discovery — `nexus.yaml` under a repo subpath | ✅ | | |
+| Subdirectory spec path via walk-up repo discovery — `nexus.yaml` under a repo subpath | ✅ | ✅ | ✅ |
+| `projects.subdir` column + migration for existing DBs | ✅ | ✅ | ✅ |
 | Path-scoped change detection for branch refs — redeploy only when the app's subtree changed | | | |
 | **Deployment lifecycle** |
 | CHECKOUT: `git worktree add` at project alias path under root spec-path | ✅ | ✅ | ✅ |

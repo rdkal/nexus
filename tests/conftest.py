@@ -88,6 +88,10 @@ class NexusClient:
         _, body = self._request("GET", f"/projects/{address}/services/{svc}/log")
         return body
 
+    def get_build_log(self, address: str, sha: str):
+        _, body = self._request("GET", f"/projects/{address}/builds/{sha}/log")
+        return body
+
     def restart_service(self, address: str, svc: str):
         status, body = self._request(
             "POST", f"/projects/{address}/services/{svc}/restart"
@@ -201,7 +205,8 @@ CREATE TABLE IF NOT EXISTS projects (
     name        TEXT PRIMARY KEY,
     spec_path   TEXT NOT NULL,
     ref         TEXT NOT NULL DEFAULT '@main',
-    current_sha TEXT
+    current_sha TEXT,
+    subdir      TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS deployments (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -222,14 +227,16 @@ CREATE TABLE IF NOT EXISTS services (
 """
 
 
-def _add_project_to_db(db_path: Path, name: str, spec_path: str, ref: str = "@main"):
+def _add_project_to_db(
+    db_path: Path, name: str, spec_path: str, ref: str = "@main", subdir: str = ""
+):
     """Bootstrap the nexus schema (if needed) and insert a project record."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.executescript(_NEXUS_SCHEMA)
     conn.execute(
-        "INSERT INTO projects (name, spec_path, ref) VALUES (?, ?, ?)",
-        (name, spec_path, ref),
+        "INSERT INTO projects (name, spec_path, ref, subdir) VALUES (?, ?, ?, ?)",
+        (name, spec_path, ref, subdir),
     )
     conn.commit()
     conn.close()
@@ -258,9 +265,9 @@ class NexusFixture:
     def socket_path(self) -> Path:
         return self._home / "nexus.sock"
 
-    def add_project(self, spec_path: str, name: str, ref: str = "@main"):
+    def add_project(self, spec_path: str, name: str, ref: str = "@main", subdir: str = ""):
         """Register a project in the DB before the daemon starts."""
-        _add_project_to_db(self.db_path, name, spec_path, ref)
+        _add_project_to_db(self.db_path, name, spec_path, ref, subdir)
 
     def start(self, poll_interval: str = "2s", extra_env: dict | None = None):
         """Start nexus-pm, which auto-starts the nexus daemon."""

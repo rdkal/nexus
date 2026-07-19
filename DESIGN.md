@@ -106,6 +106,18 @@ time. Nexus resolves the actual transport (SSH, HTTPS, local) from the git CLI c
 so no scheme is needed. Spec paths are only ever used for git operations — cloning, polling,
 worktree checkout. They play no role in identifying resources at runtime.
 
+**Subdirectories (monorepos).** A spec path may point at a subdirectory of a repo, so several
+apps can share one repo and deploy independently — exactly as Go resolves a module in a
+subdirectory. Nexus discovers where the repo ends by *walking up*: it probes candidate remotes
+with `git ls-remote` from the full path down, and the first that is a reachable repo is the
+repo root, with the trailing segments as the in-repo subdirectory. So
+`github.com/myorg/monorepo/services/api` clones `github.com/myorg/monorepo` and reads
+`services/api/nexus.yaml`, with the app's build and services running in that subdirectory. The
+split is resolved once (at `nexus project add`) and cached, so polling never re-probes; a plain
+repo resolves on the first probe with an empty subdirectory. Combined with a wildcard tag ref
+(`@web-v*`), one line adds a monorepo app tracking just its own tags:
+`nexus project add github.com/myorg/monorepo/services/api --ref @api-v*`.
+
 Inline projects — `projects:` entries without a `src:` — have no spec path and no
 independent git identity. They are defined entirely within the parent `nexus.yaml`.
 

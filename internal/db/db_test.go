@@ -1,9 +1,12 @@
 package db_test
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 
 	"github.com/rdkal/nexus/internal/db"
 )
@@ -195,5 +198,54 @@ func TestAddAndFinishDeployment(t *testing.T) {
 	}
 	if err := d.FinishDeployment(id2, "rolled_back", time.Now()); err != nil {
 		t.Fatalf("FinishDeployment rolled_back: %v", err)
+	}
+}
+
+// TestMigrate_AddsSubdirColumn verifies a database created before the subdir
+// column upgrades cleanly on Open, defaulting existing rows to "".
+func TestMigrate_AddsSubdirColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+
+	// Simulate a pre-subdir database.
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatalf("open raw: %v", err)
+	}
+	_, err = raw.Exec(`
+		CREATE TABLE projects (
+		    name TEXT PRIMARY KEY, spec_path TEXT NOT NULL,
+		    ref TEXT NOT NULL DEFAULT '@main', current_sha TEXT
+		);
+		INSERT INTO projects (name, spec_path, ref) VALUES ('api', 'github.com/x/y', '@main');
+	`)
+	if err != nil {
+		t.Fatalf("seed old schema: %v", err)
+	}
+	raw.Close()
+
+	// Open through db.Open, which runs the migration.
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("Open (migrate): %v", err)
+	}
+	defer d.Close()
+
+	got, err := d.GetProject("api")
+	if err != nil {
+		t.Fatalf("GetProject after migrate: %v", err)
+	}
+	if got.Subdir != "" {
+		t.Errorf("migrated Subdir = %q, want empty", got.Subdir)
+	}
+
+	// The new column is usable.
+	if err := d.AddProject(db.Project{
+		Name: "api2", SpecPath: "github.com/x/y", Ref: "@main", Subdir: "services/api",
+	}); err != nil {
+		t.Fatalf("AddProject with subdir: %v", err)
+	}
+	got2, _ := d.GetProject("api2")
+	if got2.Subdir != "services/api" {
+		t.Errorf("Subdir = %q, want services/api", got2.Subdir)
 	}
 }
