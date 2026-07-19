@@ -65,6 +65,10 @@ REFS = """\
 @web-v*     newest tag matching a glob — one app in a monorepo
 """
 
+WEB_UI = """\
+nexus project add github.com/rdkal/nexus/web
+"""
+
 
 def code(text: str):
     return Panel[h.pre(class_="code")[text.rstrip("\n")]]
@@ -114,6 +118,21 @@ def page():
                     ":",
                 ],
                 code(REFS),
+                h.h2["Web UI (optional)"],
+                h.p[
+                    "There's a small dashboard, and it's just another nexus project. "
+                    "It lives in the nexus repo under ",
+                    h.code["web/"],
+                    ", so you add it by that subdirectory path — nexus finds the repo, "
+                    "reads ",
+                    h.code["web/nexus.yaml"],
+                    ", and runs it on port 7777 against the daemon socket:",
+                ],
+                code(WEB_UI),
+                h.p[
+                    "It shows your project tree, each deployment's history and current SHA, "
+                    "and per-service status with live logs — plus one-click redeploy and restart.",
+                ],
             ]
         ]
     ]

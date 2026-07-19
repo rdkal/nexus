@@ -536,13 +536,21 @@ rather than failing because it "already exists".
 
 ### nexus-web as a normal project
 
-The web UI is not bundled or special-cased. It is simply a project added by the operator:
+The web UI is not bundled or special-cased. It is simply a project added by the operator.
+It currently lives **in this repository**, under `web/` — there is no separate
+`github.com/rdkal/nexus-web` repo — so it is added by its subdirectory path (nexus walks
+up to the repo root and reads `web/nexus.yaml`):
 
 ```
-nexus project add github.com/rdkal/nexus-web --ref @latest
+nexus project add github.com/rdkal/nexus/web
 ```
 
-Its `nexus.yaml` looks like any other service project:
+Because its repo root is nexus's own spec path, self-update identification checks the
+subdirectory too: only the whole-repo project (`subdir == ""`) is nexus itself, so deploying
+the `web` subdir project never triggers a runtime restart. (If the web UI is ever extracted to
+its own repo, `nexus project add github.com/rdkal/nexus-web` would work identically.)
+
+Its `web/nexus.yaml` looks like any other service project:
 
 ```yaml
 build: pip install -r requirements.txt
@@ -653,9 +661,11 @@ inline ones, which the runtime still deploys independently (keyed by their relat
 
 ### nexus-web (Python)
 
-The web UI is written in Python using [iris](https://rdkal.github.io/iris). It is an **optional**
-project added by the operator — not bundled or special-cased in either nexus-pm or nexus.
-It connects to `$NEXUS_HOME/nexus.sock` and serves the public HTTP interface on port 7777.
+The web UI is written in Python using [iris](https://rdkal.github.io/iris). It lives in this
+repository under `web/` (there is no separate `nexus-web` repo) and is an **optional** project
+added by the operator — not bundled or special-cased in either nexus-pm or nexus. It connects
+to `$NEXUS_HOME/nexus.sock` and serves the public HTTP interface on port 7777. See
+[nexus-web as a normal project](#nexus-web-as-a-normal-project) for how it's added.
 
 ### nexus.sock API
 
