@@ -107,7 +107,7 @@ func projectAddCmd(homeFlag *string) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&refFlag, "ref", "@main", "ref to track (@main, @v15, @latest)")
+	cmd.Flags().StringVar(&refFlag, "ref", "@main", "ref to track (@main, @v15, @latest, or a tag glob like @web-v*)")
 	return cmd
 }
 

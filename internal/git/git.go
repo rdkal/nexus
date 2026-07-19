@@ -63,8 +63,18 @@ func WorktreeRemove(repoDir, path string) error {
 	return err
 }
 
-// ResolveRef resolves a nexus ref (@main, @v1.2.3, @latest) to a commit SHA
-// by running git ls-remote against origin in the bare clone at repoDir.
+// ResolveRef resolves a nexus ref to a commit SHA by running git ls-remote
+// against origin in the bare clone at repoDir. Supported forms:
+//
+//	@main        branch tip (refs/heads/main)
+//	@v1.2.3      exact tag (refs/tags/v1.2.3), or branch of the same name
+//	@latest      highest semver tag across all tags
+//	@<glob>      highest semver tag matching a glob, e.g. @web-v*, @v2.* —
+//	             the user's own tag scheme, matched against refs/tags/<glob>
+//
+// A ref containing '*' is a tag glob: it never matches a branch. This lets one
+// app in a monorepo track only its own tags (whatever prefix it uses) without
+// nexus imposing a tag convention.
 func ResolveRef(repoDir, ref string) (string, error) {
 	if !strings.HasPrefix(ref, "@") {
 		return "", fmt.Errorf("ref %q must start with @", ref)
@@ -73,10 +83,14 @@ func ResolveRef(repoDir, ref string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("ref cannot be empty")
 	}
-	if name == "latest" {
-		out, err := run(repoDir, "ls-remote", "--tags", "--sort=-version:refname", "origin", "refs/tags/*")
+	if name == "latest" || strings.Contains(name, "*") {
+		pattern := "refs/tags/*"
+		if name != "latest" {
+			pattern = "refs/tags/" + name
+		}
+		out, err := run(repoDir, "ls-remote", "--tags", "--sort=-version:refname", "origin", pattern)
 		if err != nil {
-			return "", fmt.Errorf("ls-remote @latest: %w", err)
+			return "", fmt.Errorf("ls-remote %q: %w", ref, err)
 		}
 		return ParseLsRemoteLatest(out)
 	}
