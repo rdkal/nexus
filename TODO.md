@@ -11,12 +11,16 @@
 | NEXUS_HOME directory structure creation | ✅ | ✅ | ✅ |
 | systemd user service registration (Linux) — points to `nexus-pm` | ✅ | ✅ | |
 | launchctl plist registration (macOS) — points to `nexus-pm` | ✅ | ✅ | |
+| Install & self-update without host Go — CI (`release.yml`) builds release binaries; `install.sh` and self-update download them (prebuilt only, no source fallback) | ✅ | ✅ | ✅ |
+| Install registers no projects — `nexus project add` is a separate step afterwards | ✅ | ✅ | ✅ |
 | **Configuration** |
 | `nexus.yaml` parser (external projects, inline projects, recursive `projects:`) | ✅ | ✅ | ✅ |
 | Project name inference from spec path (final segment default) | ✅ | ✅ | ✅ |
 | Custom project name via `spec-path:name` syntax | ✅ | ✅ | ✅ |
 | `nexus project add <spec-path[:name]>` CLI command | ✅ | ✅ | |
 | `nexus project remove <name>` CLI command | ✅ | ✅ | |
+| `projects:` string shorthand — `<spec>@<ref>` (or bare `<spec>`) as an alternative to the `{src, ref}` map | ✅ | ✅ | ✅ |
+| Drop the mandatory `@` ref prefix — bare refs (`main`, `v15`, `latest`, `web-v*`); `@` only as the `spec@ref` separator | ✅ | ✅ | ✅ |
 | **Git layer** |
 | Bare clone at spec path under `repos/` | ✅ | ✅ | ✅ |
 | Git transport resolution from git CLI config (SSH/HTTPS/local) | ✅ | ✅ | ✅ |
@@ -94,6 +98,9 @@
 | Service detail page + log (auto-polling tail) | ✅ | ✅ | ✅ |
 | Redeploy / restart actions (fixi POST → banner) | ✅ | ✅ | ✅ |
 | Build-log route `GET /projects/<address>/builds/<sha>/log` + web build-log page | ✅ | ✅ | ✅ |
+| **Docs site** (GitHub Pages, iris — `docs-src/build.py`) |
+| Static page with install + `nexus.yaml` syntax, served from `/docs` | ✅ | ✅ | ✅ |
+| Code blocks full-width with horizontal overflow scroll (`overflow-x: auto`, no wrap) | ✅ | ✅ | ✅ |
 | **Go unit tests** |
 | Ref parsing (`@branch`, `@tag`, `@latest`) from `git ls-remote` output | ✅ | ✅ | ✅ |
 | Commit queuing logic (latest-wins, replace pending) | ✅ | ✅ | ✅ |
