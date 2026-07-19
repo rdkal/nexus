@@ -101,14 +101,17 @@ func ResolveRef(repoDir, ref string) (string, error) {
 	return ParseLsRemoteOutput(out, name)
 }
 
-// ResolveRepoRoot discovers the git repository within a spec path by walking up.
-// It probes candidate remotes from the full path down to the shortest and returns
-// the first that is a reachable git repo as the repo root, with the remaining
-// trailing segments as the in-repo subdirectory. This lets a monorepo app be
-// referenced by a single path like "github.com/org/repo/services/api" (repo root
-// "github.com/org/repo", subdir "services/api"), exactly as Go resolves a module
-// in a subdirectory. A path that is itself a repo resolves on the first probe
-// with an empty subdir, so ordinary projects pay only one ls-remote.
+// ResolveRepoRoot discovers the git repository within a spec path by walking up,
+// and resolves its transport. It probes candidate remotes from the full path down
+// to the shortest and returns the first reachable repo as the repo root — as an
+// actual clone URL — with the remaining trailing segments as the in-repo
+// subdirectory. So "github.com/org/repo/services/api" yields repo root
+// "https://github.com/org/repo" (or whatever transport works) and subdir
+// "services/api", exactly as Go resolves a module in a subdirectory. A path that
+// is itself a repo resolves on the first prefix with an empty subdir.
+//
+// For a scheme-less host path each prefix is tried over several transports (see
+// candidateRemotes) so it works without the user configuring git insteadOf.
 func ResolveRepoRoot(specPath string) (root, subdir string, err error) {
 	specPath = strings.TrimRight(specPath, "/")
 	if specPath == "" {
@@ -116,15 +119,34 @@ func ResolveRepoRoot(specPath string) (root, subdir string, err error) {
 	}
 	segs := strings.Split(specPath, "/")
 	for i := len(segs); i >= 1; i-- {
-		candidate := strings.Join(segs[:i], "/")
-		if candidate == "" {
+		prefix := strings.Join(segs[:i], "/")
+		if prefix == "" {
 			continue // skip empty prefixes from a scheme like file://
 		}
-		if remoteExists(candidate) {
-			return candidate, strings.Join(segs[i:], "/"), nil
+		for _, remote := range candidateRemotes(prefix) {
+			if remoteExists(remote) {
+				return remote, strings.Join(segs[i:], "/"), nil
+			}
 		}
 	}
 	return "", "", fmt.Errorf("no git repository found for spec path %q", specPath)
+}
+
+// candidateRemotes returns the transports to try for a spec, in order. A spec
+// that already carries a scheme (https://…, file://…) or is scp-like (git@host:…)
+// is used verbatim. A scheme-less host path (github.com/org/repo) is tried:
+//  1. as-is — so a git `insteadOf` the user configured still wins;
+//  2. over HTTPS — the common no-config case;
+//  3. over SSH (git@host:path).
+func candidateRemotes(spec string) []string {
+	if strings.Contains(spec, "://") || strings.Contains(spec, "@") {
+		return []string{spec}
+	}
+	cands := []string{spec, "https://" + spec}
+	if host, path, ok := strings.Cut(spec, "/"); ok && strings.Contains(host, ".") {
+		cands = append(cands, "git@"+host+":"+path)
+	}
+	return cands
 }
 
 // remoteExists reports whether remote is a reachable git repository. Credential

@@ -47,7 +47,14 @@ nexus project add github.com/myorg/system-a:my-custom-name
 nexus project remove my-system
 ```
 
-The installer requires `git` and `curl` on `PATH`; **no Go toolchain and no root**. It
+`add` and `remove` take effect immediately: the CLI writes the project to the database and
+notifies the running daemon (`POST /projects` on the socket), which reconciles live — it
+starts the newly-added root project and stops removed ones without a restart.
+
+The installer adds `$NEXUS_HOME/bin` to `PATH` (idempotently, via `~/.profile`, `~/.bashrc`,
+and `~/.zshrc`) so the `nexus` command is found in new shells; it also prints the one-line
+`export PATH=…` to run in the current shell. The installer requires `git` and `curl` on
+`PATH`; **no Go toolchain and no root**. It
 downloads **prebuilt** `nexus` and `nexus-pm` binaries from the GitHub release into
 `$NEXUS_HOME/bin` (latest by default, or a specific `--ref v1.2.3`). Binaries are
 cross-compiled with `CGO_ENABLED=0` (nexus uses pure-Go SQLite), so there is no C toolchain
@@ -98,10 +105,14 @@ github.com/nexus-community/postgres
 github.com/myorg/monorepo/services/api
 ```
 
-Spec paths appear in `src:` fields inside `projects:` and as `nexus project add` arguments
-time. Nexus resolves the actual transport (SSH, HTTPS, local) from the git CLI configuration,
-so no scheme is needed. Spec paths are only ever used for git operations — cloning, polling,
-worktree checkout. They play no role in identifying resources at runtime.
+Spec paths appear in `src:` fields inside `projects:` and as `nexus project add` arguments,
+without a scheme. Nexus resolves the transport when the project is added (or a sub-project
+discovered): it tries the spec **as-is** first — so a git `insteadOf` the user configured
+still wins — then **HTTPS**, then **SSH** (`git@host:path`), and stores the working clone URL.
+A spec that already carries a scheme (`https://…`, `file://…`) or is scp-like (`git@…`) is used
+verbatim. Spec paths are only ever used for git operations — cloning, polling, worktree
+checkout. They play no role in identifying resources at runtime. An unresolvable spec is
+rejected at `add` time rather than stored as a project that can never deploy.
 
 **Subdirectories (monorepos).** A spec path may point at a subdirectory of a repo, so several
 apps can share one repo and deploy independently — exactly as Go resolves a module in a

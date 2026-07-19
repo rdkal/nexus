@@ -49,6 +49,12 @@ type Daemon struct {
 	// Defaults to defaultSelfSpecPath (or $NEXUS_SELF_SPEC); empty disables it.
 	SelfSpecPath string
 
+	// ctx is the daemon's root context, captured in Run. Projects started after
+	// startup (via reconcile) derive from it so they live until daemon shutdown.
+	ctx context.Context
+
+	reconcileMu sync.Mutex // serialises reconcileRoots
+
 	mu sync.RWMutex
 	// projects holds every live project keyed by resource address. This includes
 	// both root projects and discovered external sub-projects (e.g. "my-system/db").
@@ -98,26 +104,82 @@ func New(database *db.DB, sup SupervisorAPI, paths home.Paths) *Daemon {
 // (and their sub-projects), starts the git polling loops, and serves the Unix socket
 // API. It blocks until ctx is cancelled.
 func (d *Daemon) Run(ctx context.Context) error {
+	d.ctx = ctx
 	projects, err := d.DB.ListProjects()
 	if err != nil {
 		return err
 	}
 	for _, p := range projects {
-		ps := &projectState{
-			address:      p.Name,
-			specPath:     p.SpecPath,
-			rootSpecPath: p.SpecPath,
-			ref:          p.Ref,
-			subdir:       p.Subdir,
-			recoverSHA:   p.CurrentSHA,
-			queue:        &poller.Queue{},
-			svcSpecs:     make(map[string]supervisor.ServiceSpec),
-		}
-		if err := d.startProjectState(ctx, ps); err != nil {
-			slog.Error("daemon: failed to start project", "address", ps.address, "err", err)
+		if err := d.startProjectState(ctx, rootState(p)); err != nil {
+			slog.Error("daemon: failed to start project", "address", p.Name, "err", err)
 		}
 	}
 	return d.serve(ctx)
+}
+
+// rootState builds a live projectState for a root project from its DB record.
+func rootState(p db.Project) *projectState {
+	return &projectState{
+		address:      p.Name,
+		specPath:     p.SpecPath,
+		rootSpecPath: p.SpecPath,
+		ref:          p.Ref,
+		subdir:       p.Subdir,
+		recoverSHA:   p.CurrentSHA,
+		queue:        &poller.Queue{},
+		svcSpecs:     make(map[string]supervisor.ServiceSpec),
+	}
+}
+
+// reconcileRoots starts root projects newly added to the DB and stops those
+// removed from it, so `nexus project add`/`remove` take effect without a daemon
+// restart. It is serialised and safe to call repeatedly.
+func (d *Daemon) reconcileRoots() {
+	d.reconcileMu.Lock()
+	defer d.reconcileMu.Unlock()
+
+	projects, err := d.DB.ListProjects()
+	if err != nil {
+		slog.Error("daemon: reconcile: list projects", "err", err)
+		return
+	}
+	want := make(map[string]db.Project, len(projects))
+	for _, p := range projects {
+		want[p.Name] = p
+	}
+
+	d.mu.RLock()
+	var toStart []db.Project
+	for name, p := range want {
+		if _, ok := d.projects[name]; !ok {
+			toStart = append(toStart, p)
+		}
+	}
+	var toStop []*projectState
+	for addr, ps := range d.projects {
+		if len(ps.aliases) != 0 {
+			continue // external sub-project — owned by its parent, not the DB
+		}
+		if _, ok := want[addr]; !ok {
+			toStop = append(toStop, ps)
+		}
+	}
+	d.mu.RUnlock()
+
+	for _, ps := range toStop {
+		slog.Info("daemon: project removed from db; stopping", "name", ps.address)
+		d.stopProjectState(ps)
+	}
+	ctx := d.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for _, p := range toStart {
+		slog.Info("daemon: project added; starting", "name", p.Name)
+		if err := d.startProjectState(ctx, rootState(p)); err != nil {
+			slog.Error("daemon: failed to start added project", "name", p.Name, "err", err)
+		}
+	}
 }
 
 // startProjectState ensures a bare clone, recovers previously running services if

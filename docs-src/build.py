@@ -103,16 +103,21 @@ def page():
                 ],
                 code(INSTALL),
                 h.p[
-                    "Then add a project. The web dashboard is a good first one — it's just "
-                    "another nexus project, in the nexus repo under ",
+                    "The installer adds ",
+                    h.code["~/.nexus/bin"],
+                    " to your PATH — open a new terminal (or re-source your shell) so ",
+                    h.code["nexus"],
+                    " is found. Then add a project; the web dashboard is a good first one — "
+                    "it's just another nexus project, in the nexus repo under ",
                     h.code["web/"],
                     ", so you add it by that subdirectory path:",
                 ],
                 code(WEB_UI),
                 h.p[
-                    "It runs on port 7777 and shows your project tree, each deployment's "
-                    "history and current SHA, and per-service status with live logs — plus "
-                    "one-click redeploy and restart.",
+                    "Adding a project deploys it right away, and nexus then polls its ref "
+                    "(~30 s) and redeploys on new commits. The dashboard runs on port 7777 "
+                    "and shows your project tree, deployment history, and per-service status "
+                    "with live logs — plus one-click redeploy and restart.",
                 ],
                 h.h2["The nexus.yaml file"],
                 h.p[
