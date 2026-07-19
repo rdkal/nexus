@@ -2,15 +2,14 @@
 # Nexus installer.
 #
 # Usage:
-#   curl -fsSL https://github.com/rdkal/nexus/raw/main/install.sh | sh -s -- \
-#     --project github.com/myorg/system-a \
-#     --project github.com/myorg/system-b:custom-name
+#   curl -fsSL https://github.com/rdkal/nexus/raw/main/install.sh | sh
 #
 # What it does:
 #   1. Downloads prebuilt nexus-pm and nexus into $NEXUS_HOME/bin
 #   2. Creates the $NEXUS_HOME directory structure
-#   3. Registers each --project repo
-#   4. Installs and starts a user-mode service pointing at nexus-pm
+#   3. Installs and starts a user-mode service pointing at nexus-pm
+#
+# Then add projects with `nexus project add <spec-path>`.
 #
 # Requirements: git and curl on PATH. No Go toolchain, no root.
 
@@ -22,14 +21,12 @@ NEXUS_REPO_URL="https://github.com/rdkal/nexus"
 NEXUS_HOME="${NEXUS_HOME:-$HOME/.nexus}"
 NEXUS_REF="${NEXUS_REF:-}"       # version to install (empty = latest release)
 install_service=1
-projects=""
 
 usage() {
 	cat <<'EOF'
 nexus installer
 
 Options:
-  --project <spec-path[:name]>   Project repo to watch. Repeatable.
   --home <path>                  Install location (default: $HOME/.nexus).
   --ref <version>                nexus version to install (default: latest release),
                                  e.g. --ref v1.2.3.
@@ -39,6 +36,8 @@ Options:
 Environment:
   NEXUS_HOME   Same as --home.
   NEXUS_REF    Same as --ref.
+
+After installing, add projects with: nexus project add <spec-path>
 EOF
 }
 
@@ -48,13 +47,12 @@ info() { echo "==> $*"; }
 # --- parse arguments ---
 while [ $# -gt 0 ]; do
 	case "$1" in
-		--project) [ $# -ge 2 ] || die "--project needs a value"; projects="$projects $2"; shift 2 ;;
-		--project=*) projects="$projects ${1#--project=}"; shift ;;
 		--home) [ $# -ge 2 ] || die "--home needs a value"; NEXUS_HOME="$2"; shift 2 ;;
 		--home=*) NEXUS_HOME="${1#--home=}"; shift ;;
 		--ref) [ $# -ge 2 ] || die "--ref needs a value"; NEXUS_REF="$2"; shift 2 ;;
 		--ref=*) NEXUS_REF="${1#--ref=}"; shift ;;
 		--no-service) install_service=0; shift ;;
+		--project|--project=*) die "--project is no longer supported; after install run: nexus project add <spec-path>" ;;
 		-h|--help) usage; exit 0 ;;
 		*) die "unknown argument: $1 (try --help)" ;;
 	esac
@@ -108,12 +106,6 @@ done
 [ -x "$BIN/nexus" ] || die "install did not produce $BIN/nexus"
 [ -x "$BIN/nexus-pm" ] || die "install did not produce $BIN/nexus-pm"
 info "installed $BIN/nexus and $BIN/nexus-pm"
-
-# --- register projects ---
-for p in $projects; do
-	info "registering project: $p"
-	"$BIN/nexus" --home "$NEXUS_HOME" project add "$p"
-done
 
 # --- service setup ---
 setup_systemd() {
@@ -211,3 +203,13 @@ else
 fi
 
 info "done"
+cat <<EOF
+
+Add a project to start deploying:
+
+    $BIN/nexus project add <spec-path>
+
+for example the web dashboard (serves on port 7777):
+
+    $BIN/nexus project add github.com/rdkal/nexus/web
+EOF

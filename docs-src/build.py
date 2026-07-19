@@ -32,14 +32,7 @@ pre.code {
 """
 
 INSTALL = """\
-curl https://github.com/rdkal/nexus/raw/main/install.sh | sh -s -- \\
-  --project github.com/myorg/my-system
-"""
-
-MANAGE = """\
-nexus project add github.com/myorg/my-system
-nexus project add github.com/myorg/monorepo/services/api@api-v*
-nexus project remove my-system
+curl https://github.com/rdkal/nexus/raw/main/install.sh | sh
 """
 
 NEXUS_YAML = """\
@@ -109,8 +102,18 @@ def page():
                     " on your PATH — no root, no Go toolchain. It downloads prebuilt binaries.",
                 ],
                 code(INSTALL),
-                h.p["Add or remove projects any time after install:"],
-                code(MANAGE),
+                h.p[
+                    "Then add a project. The web dashboard is a good first one — it's just "
+                    "another nexus project, in the nexus repo under ",
+                    h.code["web/"],
+                    ", so you add it by that subdirectory path:",
+                ],
+                code(WEB_UI),
+                h.p[
+                    "It runs on port 7777 and shows your project tree, each deployment's "
+                    "history and current SHA, and per-service status with live logs — plus "
+                    "one-click redeploy and restart.",
+                ],
                 h.h2["The nexus.yaml file"],
                 h.p[
                     "A repo becomes deployable by adding a ",
@@ -127,21 +130,6 @@ def page():
                     ".",
                 ],
                 code(REFS),
-                h.h2["Web UI (optional)"],
-                h.p[
-                    "There's a small dashboard, and it's just another nexus project. "
-                    "It lives in the nexus repo under ",
-                    h.code["web/"],
-                    ", so you add it by that subdirectory path — nexus finds the repo, "
-                    "reads ",
-                    h.code["web/nexus.yaml"],
-                    ", and runs it on port 7777 against the daemon socket:",
-                ],
-                code(WEB_UI),
-                h.p[
-                    "It shows your project tree, each deployment's history and current SHA, "
-                    "and per-service status with live logs — plus one-click redeploy and restart.",
-                ],
             ]
         ]
     ]
