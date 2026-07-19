@@ -50,13 +50,11 @@ nexus project add github.com/myorg/system-a:my-custom-name
 nexus project remove my-system
 ```
 
-The installer requires `git` and `curl` on `PATH`; no root is needed. It downloads
-**prebuilt** `nexus` and `nexus-pm` binaries from the GitHub release into `$NEXUS_HOME/bin`
-(latest by default, or a specific `--ref v1.2.3`). Binaries are cross-compiled with
-`CGO_ENABLED=0` (nexus uses pure-Go SQLite), so no C toolchain is involved. Go is only
-needed to **build from source** — a local checkout (`NEXUS_SRC`), a branch `--ref`,
-`--from-source`, or when no prebuilt binary is available; then the installer falls back to
-`go install` and requires `go` (>= 1.22).
+The installer requires `git` and `curl` on `PATH`; **no Go toolchain and no root**. It
+downloads **prebuilt** `nexus` and `nexus-pm` binaries from the GitHub release into
+`$NEXUS_HOME/bin` (latest by default, or a specific `--ref v1.2.3`). Binaries are
+cross-compiled with `CGO_ENABLED=0` (nexus uses pure-Go SQLite), so there is no C toolchain
+either. There is no source-build path — nexus is delivered only as released binaries.
 
 The install script:
 
@@ -513,15 +511,15 @@ build: ./scripts/build.sh   # installs the new binary, atomically swaps $NEXUS_H
 # no services: — nexus-pm owns the nexus process directly
 ```
 
-`scripts/build.sh` prefers the **prebuilt** binary from the GitHub release for the tag at the
-deployed commit (found via `git ls-remote --tags`), so a tag-tracked nexus self-updates with
-**no Go toolchain** — the same delivery as the initial install. It falls back to `go build`
-only when there is no release for the commit (a branch-tracked or untagged SHA) or the
-download is unavailable.
+`scripts/build.sh` downloads the **prebuilt** binary from the GitHub release for the tag at
+the deployed commit (found via `git ls-remote --tags`), so nexus self-updates with **no Go
+toolchain** — the same delivery as the initial install. nexus must therefore track a *tagged*
+ref (`@latest` / `@vX`); a branch-tracked or untagged commit has no release, so its
+self-update fails (leaving the running binary in place) until a release for that commit exists.
 
 When a new nexus commit lands:
 
-1. **BUILD**: new binary installed (prebuilt download, else source build) and atomically written to `$NEXUS_HOME/bin/nexus`.
+1. **BUILD**: the prebuilt binary for the tag is downloaded and atomically written to `$NEXUS_HOME/bin/nexus`.
 2. **PROMOTE**: SHA recorded in `nexus.db`. Old worktree removed.
 3. nexus recognises the deployed project as *itself* and calls `POST /runtime/restart`
    on `nexus-pm.sock`.

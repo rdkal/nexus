@@ -40,39 +40,28 @@ detect_platform() {
 	printf '%s-%s' "$_os" "$_arch"
 }
 
-# Build to a temp file in the target directory, then rename over the live binary.
-# rename(2) is atomic within a filesystem, so nexus-pm never observes a
-# partially written binary even if it restarts the runtime mid-update.
+command -v curl >/dev/null 2>&1 || { echo "nexus build: 'curl' is required" >&2; exit 1; }
+platform=$(detect_platform) || { echo "nexus build: no prebuilt binaries for $(uname -s)/$(uname -m)" >&2; exit 1; }
+
+# Find the release tag whose commit is this SHA. For an annotated tag the peeled
+# line (refs/tags/x^{}) carries the commit; a lightweight tag carries it directly.
+tag=$(git ls-remote --tags origin 2>/dev/null \
+	| awk -v s="$sha" '$1 == s {print $2}' \
+	| sed -e 's#refs/tags/##' -e 's/\^{}$//' \
+	| head -n1)
+[ -n "$tag" ] || {
+	echo "nexus build: no release tag at $sha — nexus must track a tagged ref (@latest, @vX) to self-update" >&2
+	exit 1
+}
+
+# Download to a temp file, then rename over the live binary. rename(2) is atomic
+# within a filesystem, so nexus-pm never observes a partially written binary.
 tmp="$bin_dir/.nexus.new.$$"
 trap 'rm -f "$tmp"' EXIT INT TERM
 
-# Find a release tag whose commit is this SHA. For an annotated tag the peeled
-# line (refs/tags/x^{}) carries the commit; a lightweight tag carries it directly.
-tag=""
-if command -v curl >/dev/null 2>&1 && [ -n "$sha" ]; then
-	tag=$(git ls-remote --tags origin 2>/dev/null \
-		| awk -v s="$sha" '$1 == s {print $2}' \
-		| sed -e 's#refs/tags/##' -e 's/\^{}$//' \
-		| head -n1)
-fi
-platform=$(detect_platform 2>/dev/null || true)
-
-if [ -n "$tag" ] && [ -n "$platform" ] \
-	&& curl -fsSL "$NEXUS_REPO_URL/releases/download/$tag/nexus-$platform" -o "$tmp"; then
-	chmod +x "$tmp"
-	mv -f "$tmp" "$bin_dir/nexus"
-	trap - EXIT INT TERM
-	echo "nexus build: installed prebuilt $tag ($platform)"
-	exit 0
-fi
-
-# Fall back to building from source. Requires the Go toolchain.
-command -v go >/dev/null 2>&1 || {
-	echo "nexus build: no prebuilt release for this commit and 'go' is not available" >&2
-	exit 1
-}
-go build -o "$tmp" ./cmd/nexus
+curl -fsSL "$NEXUS_REPO_URL/releases/download/$tag/nexus-$platform" -o "$tmp" \
+	|| { echo "nexus build: could not download nexus $tag ($platform) — release not published yet?" >&2; exit 1; }
 chmod +x "$tmp"
 mv -f "$tmp" "$bin_dir/nexus"
 trap - EXIT INT TERM
-echo "nexus build: built from source and swapped $bin_dir/nexus"
+echo "nexus build: installed prebuilt $tag ($platform)"
