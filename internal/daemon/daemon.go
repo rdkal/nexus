@@ -316,7 +316,7 @@ func (d *Daemon) reconcileChildren(ctx context.Context, ps *projectState, cfg *c
 func (d *Daemon) startChild(ctx context.Context, parent *projectState, ext config.ExternalRef) {
 	ref := ext.Ref
 	if ref == "" {
-		ref = "@main"
+		ref = "main"
 	}
 	relKey := strings.Join(ext.RelPath, "/")
 	childAddr := parent.address + "/" + relKey

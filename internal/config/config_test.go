@@ -212,3 +212,50 @@ func joinRelForTest(rel []string) string {
 	}
 	return out
 }
+
+func TestSubProject_StringShorthand(t *testing.T) {
+	f, err := config.ParseBytes([]byte(`
+projects:
+  db: github.com/community/postgres@v15
+  cache: github.com/community/redis
+  metrics:
+    services:
+      exporter:
+        run: ./exporter
+`))
+	if err != nil {
+		t.Fatalf("ParseBytes: %v", err)
+	}
+
+	// String with @ref → external, spec + ref split on '@'.
+	db := f.Projects["db"]
+	if !db.IsExternal() || db.Src != "github.com/community/postgres" || db.Ref != "v15" {
+		t.Errorf("db shorthand = %+v", db)
+	}
+	// Bare string → external, no ref (caller applies default).
+	cache := f.Projects["cache"]
+	if !cache.IsExternal() || cache.Src != "github.com/community/redis" || cache.Ref != "" {
+		t.Errorf("cache shorthand = %+v", cache)
+	}
+	// Map form still parses as before (inline here).
+	metrics := f.Projects["metrics"]
+	if metrics.IsExternal() || metrics.Services["exporter"].Run != "./exporter" {
+		t.Errorf("metrics map = %+v", metrics)
+	}
+}
+
+func TestSubProject_MapFormExternal(t *testing.T) {
+	f, err := config.ParseBytes([]byte(`
+projects:
+  db:
+    src: github.com/community/postgres
+    ref: v15
+`))
+	if err != nil {
+		t.Fatalf("ParseBytes: %v", err)
+	}
+	db := f.Projects["db"]
+	if !db.IsExternal() || db.Src != "github.com/community/postgres" || db.Ref != "v15" {
+		t.Errorf("db map = %+v", db)
+	}
+}

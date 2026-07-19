@@ -116,8 +116,8 @@ repo root, with the trailing segments as the in-repo subdirectory. So
 `services/api/nexus.yaml`, with the app's build and services running in that subdirectory. The
 split is resolved once (at `nexus project add`) and cached, so polling never re-probes; a plain
 repo resolves on the first probe with an empty subdirectory. Combined with a wildcard tag ref
-(`@web-v*`), one line adds a monorepo app tracking just its own tags:
-`nexus project add github.com/myorg/monorepo/services/api --ref @api-v*`.
+(`web-v*`), one line adds a monorepo app tracking just its own tags:
+`nexus project add github.com/myorg/monorepo/services/api@api-v*`.
 
 Inline projects — `projects:` entries without a `src:` — have no spec path and no
 independent git identity. They are defined entirely within the parent `nexus.yaml`.
@@ -252,13 +252,12 @@ field lists other projects, each described the same way. Each nested project is 
 # project name: my-system
 
 projects:
-  db:                                         # external — src: points to another repo
-    src: github.com/nexus-community/postgres
-    ref: "@v15"
-  api:
-    src: github.com/myorg/api
-    ref: "@main"
+  db: github.com/nexus-community/postgres@v15   # external — string shorthand <spec>@<ref>
+  api: github.com/myorg/api@main
 ```
+
+An external entry may also be written in map form when it needs more than a
+`src`/`ref` — `{ src: …, ref: … }` — but the `<spec>@<ref>` string is the common case.
 
 ### Full example (external + inline projects)
 
@@ -267,9 +266,7 @@ projects:
 # project name: api
 
 projects:
-  shared-lib:                                 # external project
-    src: github.com/myorg/shared-lib
-    ref: "@main"
+  shared-lib: github.com/myorg/shared-lib@main   # external — string shorthand
   metrics:                                    # inline project — no src:, lives in this worktree
     services:
       exporter:
@@ -329,16 +326,21 @@ and is polled and deployed independently.
 | Field | Required | Description |
 |---|---|---|
 | `src` | yes | Spec path (no scheme). Nexus resolves the transport from git CLI config. Used only for git operations — plays no role in addressing |
-| `ref` | no | Ref to track, prefixed with `@`. Defaults to `@main`. See ref syntax below |
+| `ref` | no | Ref to track. Defaults to `main`. See ref syntax below |
+
+A `projects:` entry is usually written as the string shorthand `<spec>@<ref>` (the `@`
+separates spec from ref), falling back to the `{ src, ref, … }` map only when more fields
+are needed. The `--ref` flag and `ref:` field take a bare ref; a leading `@` is accepted
+but has no standalone meaning.
 
 **Ref syntax:**
 
 | Value | Behaviour |
 |---|---|
-| `@main` | Track the tip of branch `main`. Redeploys on every new commit |
-| `@v15` | Pin to tag `v15`. Redeploys only if the tag is moved (rare) |
-| `@latest` | Track the highest semver tag. Uses `git ls-remote --tags --sort=-version:refname`, takes the top result |
-| `@<glob>` | Track the highest semver tag matching a glob, e.g. `@web-v*` or `@web/v2.*`. A ref containing `*` matches `refs/tags/<glob>` only (never a branch). Lets one app in a monorepo track just its own tags, in whatever naming scheme it uses — nexus imposes no tag convention |
+| `main` | Track the tip of branch `main`. Redeploys on every new commit |
+| `v15` | Pin to tag `v15`. Redeploys only if the tag is moved (rare) |
+| `latest` | Track the highest semver tag. Uses `git ls-remote --tags --sort=-version:refname`, takes the top result |
+| `<glob>` | Track the highest semver tag matching a glob, e.g. `web-v*` or `web/v2.*`. A ref containing `*` matches `refs/tags/<glob>` only (never a branch). Lets one app in a monorepo track just its own tags, in whatever naming scheme it uses — nexus imposes no tag convention |
 
 **Inline project** — no `src:`. Defined directly in the parent `nexus.yaml`, shares the
 parent's worktree, and is deployed as part of the parent. Supports the same fields as a
@@ -514,7 +516,7 @@ build: ./scripts/build.sh   # installs the new binary, atomically swaps $NEXUS_H
 `scripts/build.sh` downloads the **prebuilt** binary from the GitHub release for the tag at
 the deployed commit (found via `git ls-remote --tags`), so nexus self-updates with **no Go
 toolchain** — the same delivery as the initial install. nexus must therefore track a *tagged*
-ref (`@latest` / `@vX`); a branch-tracked or untagged commit has no release, so its
+ref (`latest` / `vX`); a branch-tracked or untagged commit has no release, so its
 self-update fails (leaving the running binary in place) until a release for that commit exists.
 
 When a new nexus commit lands:

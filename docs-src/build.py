@@ -38,7 +38,7 @@ curl https://github.com/rdkal/nexus/raw/main/install.sh | sh -s -- \\
 
 MANAGE = """\
 nexus project add github.com/myorg/my-system
-nexus project add github.com/myorg/monorepo/services/api --ref @api-v*
+nexus project add github.com/myorg/monorepo/services/api@api-v*
 nexus project remove my-system
 """
 
@@ -58,10 +58,8 @@ services:
 
 # Compose other projects (optional).
 projects:
-  # External sub-project: its own repo + ref, deployed independently.
-  db:
-    src: github.com/nexus-community/postgres
-    ref: "@v15"
+  # External sub-project (<spec>@<ref>), deployed independently.
+  db: github.com/nexus-community/postgres@v15
 
   # Inline sub-project: shares this repo, deployed together with it.
   metrics:
@@ -71,10 +69,10 @@ projects:
 """
 
 REFS = """\
-@main       track a branch — deploys on every push
-@v1.2.3     pin an exact tag
-@latest     the newest semver tag
-@web-v*     newest tag matching a glob — one app in a monorepo
+main       track a branch — deploys on every push
+v1.2.3     pin an exact tag
+latest     the newest semver tag
+web-v*     newest tag matching a glob — one app in a monorepo
 """
 
 WEB_UI = """\
@@ -122,13 +120,11 @@ def page():
                 code(NEXUS_YAML),
                 h.h3["Ref syntax"],
                 h.p[
-                    "The tracked ref (set with ",
+                    "A ref is a branch, tag, or tag glob — set it with ",
                     h.code["--ref"],
-                    ", or per sub-project via ",
-                    h.code["ref:"],
-                    ") always starts with ",
-                    h.code["@"],
-                    ":",
+                    ", or inline as ",
+                    h.code["<spec>@<ref>"],
+                    ".",
                 ],
                 code(REFS),
                 h.h2["Web UI (optional)"],

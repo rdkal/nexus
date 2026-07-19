@@ -39,6 +39,32 @@ type SubProject struct {
 // IsExternal reports whether this sub-project references an external git repo.
 func (s SubProject) IsExternal() bool { return s.Src != "" }
 
+// UnmarshalYAML accepts a projects: entry in either form:
+//
+//	db: github.com/community/postgres@v15   # string shorthand: <spec>[@<ref>]
+//	db: { src: github.com/community/postgres, ref: v15 }   # map (external)
+//	metrics: { services: { ... } }                          # map (inline)
+//
+// The string shorthand is always an external sub-project; the '@' separates the
+// spec path from the ref (a bare spec uses the default ref).
+func (s *SubProject) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		spec, ref, _ := strings.Cut(node.Value, "@")
+		s.Src = spec
+		s.Ref = ref
+		return nil
+	}
+	// Map form. The alias type has no UnmarshalYAML, so Decode fills the fields
+	// directly instead of recursing.
+	type rawSubProject SubProject
+	var raw rawSubProject
+	if err := node.Decode(&raw); err != nil {
+		return err
+	}
+	*s = SubProject(raw)
+	return nil
+}
+
 // Parse reads and parses a nexus.yaml file at the given path.
 func Parse(path string) (*ProjectFile, error) {
 	data, err := os.ReadFile(path)
