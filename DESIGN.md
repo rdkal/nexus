@@ -34,15 +34,12 @@ Inline nested projects share the parent's worktree and are deployed together wit
 ## Installation
 
 ```sh
-curl https://github.com/rdkal/nexus/raw/main/install.sh | sh -s -- \
-  --project github.com/myorg/system-a \
-  --project github.com/myorg/system-b \
-  --project github.com/myorg/system-c:my-custom-name   # optional name override
+curl https://github.com/rdkal/nexus/raw/main/install.sh | sh
 ```
 
-`--project` can be given multiple times. The spec path after `:` sets a custom project
-name; omitting it defaults to the final path segment. Projects can also be added or
-removed after installation:
+The installer sets up nexus itself and starts it — it registers no projects. Add projects
+afterwards (the spec path after `:` sets a custom name; omitting it defaults to the final
+path segment):
 
 ```sh
 nexus project add github.com/myorg/system-a
@@ -61,8 +58,7 @@ The install script:
 1. Installs `nexus-pm` into `$NEXUS_HOME/bin/nexus-pm` (the process manager — thin, stable, rarely updated)
 2. Installs the initial `nexus` runtime into `$NEXUS_HOME/bin/nexus`
 3. Creates `$NEXUS_HOME/` directory structure
-4. Registers each `--project` repo via `nexus project add`
-5. Installs and starts a user-mode service pointing at `nexus-pm`:
+4. Installs and starts a user-mode service pointing at `nexus-pm`:
    - Linux: `systemctl --user enable --now nexus` (unit at `~/.config/systemd/user/nexus.service`)
    - macOS: `launchctl load ~/Library/LaunchAgents/com.rdkal.nexus.plist`
    - Neither available: prints instructions to run `nexus-pm` manually
@@ -102,7 +98,7 @@ github.com/nexus-community/postgres
 github.com/myorg/monorepo/services/api
 ```
 
-Spec paths appear in `src:` fields inside `projects:` and in `--project` flags at install
+Spec paths appear in `src:` fields inside `projects:` and as `nexus project add` arguments
 time. Nexus resolves the actual transport (SSH, HTTPS, local) from the git CLI configuration,
 so no scheme is needed. Spec paths are only ever used for git operations — cloning, polling,
 worktree checkout. They play no role in identifying resources at runtime.
@@ -767,7 +763,7 @@ They are slower and intended to run in CI rather than on every save.
 ## v1 Scope
 
 **In scope:**
-- Install script (`curl … | sh`) with multiple `--project` flags
+- Install script (`curl … | sh`); projects added afterwards with `nexus project add`
 - `nexus.yaml` with `projects` (external and inline), `build`, `volumes`, `services`
 - Project-name-based resource addressing; volumes and logs namespaced by resource address
 - Bare clones at spec-path, worktrees per external project instance named by project alias
