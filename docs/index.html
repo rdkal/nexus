@@ -1,0 +1,638 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>nexus — git-driven deployments</title><style>:root {
+  --bg: #ffffff;
+  --surface: #f5f6f8;
+  --text: #13151a;
+  --muted: #5b6470;
+  --accent: #2563eb;
+  --border: #e3e6ea;
+  --space: 0.5rem;
+  --radius: 0.75rem;
+  --font: system-ui, sans-serif;
+  --measure: 54rem;
+}
+
+[data-theme="light"] {
+  --bg: #ffffff;
+  --surface: #f5f6f8;
+  --text: #13151a;
+  --muted: #5b6470;
+  --accent: #2563eb;
+  --border: #e3e6ea;
+  --space: 0.5rem;
+  --radius: 0.75rem;
+  --font: system-ui, sans-serif;
+  --measure: 38rem;
+}
+
+/* iris base styles. Everything is derived from the ~12 theme tokens declared
+   on :root (see iris/theme.py). Mobile-first: base rules need no media query. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  line-height: 1.2;
+  margin: 0;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+:where(button, input, textarea, select) {
+  font: inherit;
+  color: inherit;
+}
+
+/* --- Layout ------------------------------------------------------------- */
+
+.container {
+  width: 100%;
+  max-width: var(--measure);
+  margin-inline: auto;
+  padding-inline: calc(var(--space) * 2);
+}
+
+/* Stack: vertical flow with a consistent gap (multiples of --space). */
+.stack {
+  display: flex;
+  flex-direction: column;
+}
+.stack > * + * {
+  margin-top: calc(var(--space) * var(--gap, 2));
+}
+
+/* Row: horizontal flex, wraps on small screens. */
+.row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--space) * var(--gap, 2));
+}
+
+/* Grid: responsive columns, collapses to one column on narrow viewports. */
+.grid {
+  display: grid;
+  gap: calc(var(--space) * var(--gap, 2));
+  grid-template-columns: 1fr;
+}
+@media (min-width: 40rem) {
+  .grid {
+    grid-template-columns: repeat(var(--cols, 2), 1fr);
+  }
+}
+
+.center {
+  display: grid;
+  place-items: center;
+}
+
+.divider {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 0;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+/* --- Surfaces ----------------------------------------------------------- */
+
+.card,
+.sheet,
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: calc(var(--space) * 3);
+}
+
+.elevated {
+  background: color-mix(in oklab, var(--surface), white 4%);
+}
+
+.panel {
+  border-radius: 0;
+  border-inline: 0;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+/* --- Buttons ------------------------------------------------------------ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space);
+  padding: calc(var(--space) * 1.25) calc(var(--space) * 2.5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+}
+.btn:hover {
+  background: color-mix(in oklab, var(--surface), white 6%);
+}
+.btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--bg);
+}
+.btn.primary:hover {
+  background: color-mix(in oklab, var(--accent), white 12%);
+}
+.btn.ghost {
+  background: transparent;
+}
+.btn.danger {
+  background: transparent;
+  border-color: color-mix(in oklab, var(--accent), red 60%);
+  color: color-mix(in oklab, var(--text), red 40%);
+}
+.btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* --- Forms -------------------------------------------------------------- */
+
+.form { display: flex; flex-direction: column; gap: calc(var(--space) * 3); }
+
+.field { display: flex; flex-direction: column; gap: calc(var(--space) * 1); }
+.field-label { font-size: 0.9em; color: var(--muted); }
+.field-error { font-size: 0.85em; color: #f1707a; min-height: 1em; }
+.field:not(.invalid) .field-error:empty { display: none; }
+
+.input {
+  width: 100%;
+  padding: calc(var(--space) * 1.5) calc(var(--space) * 2);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  outline: none;
+}
+.input::placeholder { color: color-mix(in oklab, var(--muted), transparent 25%); }
+.input:focus { border-color: var(--accent); }
+textarea.input { min-height: calc(var(--space) * 16); resize: vertical; }
+
+/* invalid state — set by the server or by iris-ask.js from a 422 response */
+.field.invalid .input,
+.input.invalid { border-color: #f1707a; }
+.field.invalid .field-label { color: #f1707a; }
+
+.checkbox, .switch {
+  display: inline-flex; align-items: center; gap: calc(var(--space) * 1.5);
+  cursor: pointer;
+}
+
+.switch input { position: absolute; opacity: 0; }
+.switch-track {
+  position: relative; width: calc(var(--space) * 6); height: calc(var(--space) * 3.5);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 999px;
+  transition: background 0.15s;
+}
+.switch-thumb {
+  position: absolute; top: 50%; left: calc(var(--space) * 0.5);
+  width: calc(var(--space) * 2.5); height: calc(var(--space) * 2.5);
+  transform: translateY(-50%); background: var(--muted); border-radius: 999px;
+  transition: left 0.15s, background 0.15s;
+}
+.switch input:checked + .switch-track { background: var(--accent); border-color: transparent; }
+.switch input:checked + .switch-track .switch-thumb {
+  left: calc(100% - var(--space) * 3); background: var(--bg);
+}
+
+/* --- Icons -------------------------------------------------------------- */
+
+.icon { display: inline-block; vertical-align: -0.15em; flex: none; }
+
+/* --- Overlays (native Popover API) -------------------------------------- */
+
+[popover] { border: 0; padding: 0; color: var(--text); }
+[popover]::backdrop { background: rgba(0, 0, 0, 0.5); }
+
+.overlay-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--space); padding: calc(var(--space) * 2) calc(var(--space) * 3);
+  border-bottom: 1px solid var(--border);
+}
+.overlay-title { font-weight: 600; }
+.overlay-body { padding: calc(var(--space) * 3); }
+.overlay-close {
+  background: none; border: 0; color: var(--muted); cursor: pointer;
+  font-size: 1.4em; line-height: 1; padding: 0 calc(var(--space) * 0.5);
+}
+.overlay-close:hover { color: var(--text); }
+
+/* Modal: centered card with backdrop. */
+.modal {
+  margin: auto; max-width: min(32rem, calc(100vw - 2rem));
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.modal:popover-open { animation: iris-pop 0.15s ease-out; }
+
+/* Drawer: slides in from an edge; full-width bottom sheet on mobile. */
+.drawer {
+  position: fixed; background: var(--surface); border: 1px solid var(--border);
+}
+.drawer-bottom {
+  inset: auto 0 0 0; border-radius: var(--radius) var(--radius) 0 0; border-bottom: 0;
+}
+.drawer-left { inset: 0 auto 0 0; width: min(20rem, 80vw); border-left: 0; }
+.drawer-right { inset: 0 0 0 auto; width: min(20rem, 80vw); border-right: 0; }
+.drawer-bottom:popover-open { animation: iris-slide-up 0.2s ease-out; }
+
+/* Menu & Popover: anchored panels (CSS anchor positioning where supported). */
+.menu, .popover {
+  position: absolute; top: anchor(bottom); left: anchor(left); margin-top: 0.4rem;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.menu { padding: calc(var(--space) * 0.5); min-width: 10rem; }
+.popover { padding: calc(var(--space) * 2); max-width: 18rem; }
+.menu-item {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  color: var(--text); cursor: pointer; border-radius: calc(var(--radius) / 2);
+  padding: calc(var(--space) * 1.25) calc(var(--space) * 1.5);
+}
+.menu-item:hover { background: color-mix(in oklab, var(--surface), white 6%); }
+
+@keyframes iris-pop { from { opacity: 0; transform: scale(0.96); } }
+@keyframes iris-slide-up { from { transform: translateY(100%); } }
+
+/* Toast: a notification box. Drop one (or several) into a `.toast-region` for
+   floating, auto-dismissing notifications — e.g. a fragment fixi swaps in. */
+.toast {
+  display: inline-block;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: calc(var(--space) * 1.5) calc(var(--space) * 3);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.toast.success { border-color: #3ba55d; }
+.toast.error { border-color: #d9534f; }
+
+.toast-region {
+  position: fixed; left: 50%; bottom: calc(var(--space) * 4);
+  transform: translateX(-50%); z-index: 1000; pointer-events: none;
+  display: flex; flex-direction: column; align-items: center;
+  gap: calc(var(--space) * 1.5);
+}
+.toast-region > .toast { pointer-events: auto; animation: iris-toast 4.5s forwards; }
+@keyframes iris-toast {
+  0% { opacity: 0; transform: translateY(1rem); }
+  8%, 92% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; visibility: hidden; }
+}
+
+/* --- Data display ------------------------------------------------------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 calc(var(--space) * 1.25);
+  height: calc(var(--space) * 3.5);
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.8em;
+}
+.badge.accent {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--bg);
+}
+
+.tag {
+  display: inline-flex;
+  padding: calc(var(--space) * 0.5) calc(var(--space) * 1.25);
+  border-radius: calc(var(--radius) / 2);
+  background: color-mix(in oklab, var(--surface), white 4%);
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(var(--space) * 5);
+  height: calc(var(--space) * 5);
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  object-fit: cover;
+  font-size: 0.85em;
+  font-weight: 600;
+}
+
+.stat-value {
+  font-size: 1.6rem;
+  font-weight: 600;
+  line-height: 1.1;
+}
+.stat-label {
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+.empty {
+  text-align: center;
+  padding: calc(var(--space) * 6) calc(var(--space) * 2);
+  color: var(--muted);
+}
+.empty-icon {
+  font-size: 2rem;
+  opacity: 0.6;
+}
+.empty-title {
+  color: var(--text);
+  font-weight: 600;
+  margin: var(--space) 0 calc(var(--space) * 0.5);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.list > li {
+  padding: calc(var(--space) * 2);
+}
+.list > li + li {
+  border-top: 1px solid var(--border);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.table th,
+.table td {
+  text-align: left;
+  padding: calc(var(--space) * 1.5) calc(var(--space) * 2);
+  border-bottom: 1px solid var(--border);
+}
+.table th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.85em;
+}
+
+/* --- Feedback ----------------------------------------------------------- */
+
+.spinner {
+  display: inline-block;
+  width: calc(var(--space) * 3);
+  height: calc(var(--space) * 3);
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 999px;
+  animation: iris-spin 0.6s linear infinite;
+}
+@keyframes iris-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.skeleton {
+  display: block;
+  min-height: 1em;
+  border-radius: calc(var(--radius) / 2);
+  background: linear-gradient(
+    90deg,
+    var(--surface),
+    color-mix(in oklab, var(--surface), white 8%),
+    var(--surface)
+  );
+  background-size: 200% 100%;
+  animation: iris-shimmer 1.2s ease-in-out infinite;
+}
+@keyframes iris-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.banner {
+  padding: calc(var(--space) * 2);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.banner.info {
+  border-color: var(--accent);
+}
+.banner.success {
+  border-color: #3ba55d;
+}
+.banner.warn {
+  border-color: #d9a341;
+}
+.banner.error {
+  border-color: #d9534f;
+}
+
+.progress {
+  width: 100%;
+  height: calc(var(--space) * 1.5);
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.progress::-webkit-progress-bar {
+  background: var(--surface);
+}
+.progress::-webkit-progress-value {
+  background: var(--accent);
+}
+.progress::-moz-progress-bar {
+  background: var(--accent);
+}
+
+/* --- Charts (Plot) ------------------------------------------------------ */
+
+.plot { margin: 0; max-width: 100%; }
+.plot-svg { width: 100%; height: auto; display: block; }
+.plot-grid { stroke: var(--border); stroke-opacity: 0.6; }
+.plot-tick { fill: var(--muted); font-size: 11px; }
+.plot-label { fill: var(--text); font-size: 12px; }
+.plot-dot { fill: var(--accent); }
+.plot-link { stroke: var(--muted); stroke-opacity: 0.55; }
+.plot-arrow { fill: var(--muted); }
+.plot-node-label { fill: var(--muted); font-size: 10px; }
+.plot-interactive { touch-action: none; cursor: grab; }
+.plot-interactive:active { cursor: grabbing; }
+
+.plot-legend {
+  display: flex; flex-wrap: wrap; gap: calc(var(--space) * 2);
+  margin-bottom: calc(var(--space) * 1.5); font-size: 0.85em; color: var(--muted);
+}
+.plot-legend-item { display: inline-flex; align-items: center; gap: calc(var(--space) * 1); }
+.plot-swatch {
+  width: 0.8em; height: 0.8em; border-radius: 0.2em; display: inline-block; flex: none;
+}
+
+/* --- Navigation --------------------------------------------------------- */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space);
+  padding: calc(var(--space) * 2) calc(var(--space) * 3);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.header-title { font-weight: 600; }
+
+.navlink { color: var(--text); }
+.navlink:hover { color: var(--accent); text-decoration: none; }
+
+.breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--space) * 1);
+  font-size: 0.9em;
+  color: var(--muted);
+}
+.breadcrumbs a { color: var(--muted); }
+.breadcrumbs a:hover { color: var(--text); }
+.crumb-sep { color: var(--border); }
+.crumb-current { color: var(--text); }
+
+/* App shell: header on top, main fills, tabs as a bottom bar on mobile. */
+.appshell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  position: relative;
+}
+.appshell-main {
+  flex: 1 1 auto;
+  padding: calc(var(--space) * 3);
+  overflow: auto;
+  outline: none;
+}
+
+/* App-shell top bar */
+.shell-bar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: var(--space);
+  padding: calc(var(--space) * 1.5) calc(var(--space) * 2);
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.shell-title { font-weight: 600; }
+.shell-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: calc(var(--space) * 6); height: calc(var(--space) * 6);
+  background: none; border: 0; color: var(--text); cursor: pointer;
+  border-radius: var(--radius); font-size: 1.2em; line-height: 1;
+}
+.shell-btn:hover { background: color-mix(in oklab, var(--surface), white 6%); }
+
+/* Left drawer (overlay at every size) */
+.shell-backdrop {
+  position: fixed; inset: 0; z-index: 55; background: rgba(0, 0, 0, 0.5);
+  opacity: 0; visibility: hidden; transition: opacity 0.2s;
+}
+.shell-drawer {
+  position: fixed; top: 0; left: 0; bottom: 0; z-index: 60;
+  width: min(18rem, 82vw); overflow: auto; padding: calc(var(--space) * 2);
+  background: var(--surface); border-right: 1px solid var(--border);
+  transform: translateX(-100%); transition: transform 0.2s ease;
+}
+.appshell.drawer-open .shell-backdrop { opacity: 1; visibility: visible; }
+.appshell.drawer-open .shell-drawer { transform: none; }
+
+/* Bottom tab bar (thumb-reachable) */
+.tabs {
+  position: sticky; bottom: 0;
+  display: flex; justify-content: space-around; gap: var(--space);
+  padding: calc(var(--space) * 1);
+  padding-bottom: max(calc(var(--space) * 1), env(safe-area-inset-bottom));
+  background: var(--surface); border-top: 1px solid var(--border);
+}
+.tab {
+  display: flex; flex-direction: column; align-items: center;
+  gap: calc(var(--space) * 0.5); flex: 1 1 0;
+  padding: calc(var(--space) * 1); border-radius: var(--radius);
+  color: var(--muted); font-size: 0.78em;
+  min-height: calc(var(--space) * 9); justify-content: center;
+}
+.tab:hover { color: var(--text); text-decoration: none; }
+.tab.active { color: var(--accent); }
+.tab-icon { font-size: 1.25em; line-height: 1; }
+
+/* Loading indicator toggled by iris-fixi.js during a request. */
+.fx-loading { opacity: 0.6; cursor: progress; }
+</style></head><body class="iris"><div class="container"><div class="stack" style="--gap: 1"><h1>nexus</h1><p class="lede">Git-driven deployments for your own servers. Point nexus at a repo and every push to your tracked ref deploys — no CI, no registry, no pipeline YAML.</p><p>Source &amp; full design: <a href="https://github.com/rdkal/nexus">github.com/rdkal/nexus</a>.</p><h2>Install</h2><p>One line. Needs <code>go</code> (≥ 1.22) and <code>git</code> on your PATH — no root, no prebuilt binaries.</p><div class="panel"><pre class="code">curl https://github.com/rdkal/nexus/raw/main/install.sh | sh -s -- \
+  --project github.com/myorg/my-system</pre></div><p>Add or remove projects any time after install:</p><div class="panel"><pre class="code">nexus project add github.com/myorg/my-system
+nexus project add github.com/myorg/monorepo/services/api --ref @api-v*
+nexus project remove my-system</pre></div><h2>The nexus.yaml file</h2><p>A repo becomes deployable by adding a <code>nexus.yaml</code> at its root. Every field is optional.</p><div class="panel"><pre class="code"># Build step (optional) — runs once per deploy, in this directory.
+build: go build -o server ./cmd/server
+
+# Named persistent directories (optional). Each is created on first use
+# and exposed to services as $NEXUS_VOLUME_&lt;NAME&gt;.
+volumes:
+  data: {}
+
+# Long-running processes nexus supervises (and restarts on crash).
+services:
+  web:
+    run: ./server --port 8080
+
+# Compose other projects (optional).
+projects:
+  # External sub-project: its own repo + ref, deployed independently.
+  db:
+    src: github.com/nexus-community/postgres
+    ref: &#34;@v15&#34;
+
+  # Inline sub-project: shares this repo, deployed together with it.
+  metrics:
+    services:
+      exporter:
+        run: ./exporter</pre></div><h3>Ref syntax</h3><p>The tracked ref (set with <code>--ref</code>, or per sub-project via <code>ref:</code>) always starts with <code>@</code>:</p><div class="panel"><pre class="code">@main       track a branch — deploys on every push
+@v1.2.3     pin an exact tag
+@latest     the newest semver tag
+@web-v*     newest tag matching a glob — one app in a monorepo</pre></div></div></div></body></html>

@@ -1,0 +1,1 @@
+iris-ui[fastapi] @ git+https://github.com/rdkal/iris.git@v0.2.0
