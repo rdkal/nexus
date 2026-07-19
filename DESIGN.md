@@ -50,15 +50,18 @@ nexus project add github.com/myorg/system-a:my-custom-name
 nexus project remove my-system
 ```
 
-Nexus is distributed as source and built on the host: the installer requires `go`
-(>= 1.22) and `git` on `PATH`. No prebuilt binaries and no root are needed. Binaries
-are produced with `go install` into `$NEXUS_HOME/bin` (from the published module by
-default, or from a local checkout via `NEXUS_SRC`).
+The installer requires `git` and `curl` on `PATH`; no root is needed. It downloads
+**prebuilt** `nexus` and `nexus-pm` binaries from the GitHub release into `$NEXUS_HOME/bin`
+(latest by default, or a specific `--ref v1.2.3`). Binaries are cross-compiled with
+`CGO_ENABLED=0` (nexus uses pure-Go SQLite), so no C toolchain is involved. Go is only
+needed to **build from source** — a local checkout (`NEXUS_SRC`), a branch `--ref`,
+`--from-source`, or when no prebuilt binary is available; then the installer falls back to
+`go install` and requires `go` (>= 1.22).
 
 The install script:
 
-1. Builds `nexus-pm` into `$NEXUS_HOME/bin/nexus-pm` (the process manager — thin, stable, rarely updated)
-2. Builds the initial `nexus` runtime into `$NEXUS_HOME/bin/nexus`
+1. Installs `nexus-pm` into `$NEXUS_HOME/bin/nexus-pm` (the process manager — thin, stable, rarely updated)
+2. Installs the initial `nexus` runtime into `$NEXUS_HOME/bin/nexus`
 3. Creates `$NEXUS_HOME/` directory structure
 4. Registers each `--project` repo via `nexus project add`
 5. Installs and starts a user-mode service pointing at `nexus-pm`:
@@ -506,13 +509,19 @@ Nexus tracks itself as a project with no services — only a build step:
 
 ```yaml
 # github.com/rdkal/nexus — nexus.yaml
-build: ./scripts/build.sh   # compiles new binary, atomically swaps $NEXUS_HOME/bin/nexus
+build: ./scripts/build.sh   # installs the new binary, atomically swaps $NEXUS_HOME/bin/nexus
 # no services: — nexus-pm owns the nexus process directly
 ```
 
+`scripts/build.sh` prefers the **prebuilt** binary from the GitHub release for the tag at the
+deployed commit (found via `git ls-remote --tags`), so a tag-tracked nexus self-updates with
+**no Go toolchain** — the same delivery as the initial install. It falls back to `go build`
+only when there is no release for the commit (a branch-tracked or untagged SHA) or the
+download is unavailable.
+
 When a new nexus commit lands:
 
-1. **BUILD**: new binary compiled and atomically written to `$NEXUS_HOME/bin/nexus`.
+1. **BUILD**: new binary installed (prebuilt download, else source build) and atomically written to `$NEXUS_HOME/bin/nexus`.
 2. **PROMOTE**: SHA recorded in `nexus.db`. Old worktree removed.
 3. nexus recognises the deployed project as *itself* and calls `POST /runtime/restart`
    on `nexus-pm.sock`.

@@ -7,22 +7,27 @@
 #     --project github.com/myorg/system-b:custom-name
 #
 # What it does:
-#   1. Builds nexus-pm and nexus into $NEXUS_HOME/bin
+#   1. Installs nexus-pm and nexus into $NEXUS_HOME/bin (prebuilt from a GitHub
+#      release, or built from source as a fallback)
 #   2. Creates the $NEXUS_HOME directory structure
 #   3. Registers each --project repo
 #   4. Installs and starts a user-mode service pointing at nexus-pm
 #
-# Requirements: go (>= 1.22) and git on PATH. No root required.
+# Requirements: git and curl on PATH. Go is only needed to build from source —
+# a local checkout, a branch ref, --from-source, or when no prebuilt binary is
+# available for the platform. No root required.
 
 set -eu
 
 NEXUS_MODULE="github.com/rdkal/nexus"
+NEXUS_REPO_URL="https://github.com/rdkal/nexus"
 
 # --- configuration (overridable via env or flags) ---
 NEXUS_HOME="${NEXUS_HOME:-$HOME/.nexus}"
-NEXUS_REF="${NEXUS_REF:-main}"   # branch/tag/version to build when fetching from the module
+NEXUS_REF="${NEXUS_REF:-}"       # version to install (empty = latest release); a branch builds from source
 NEXUS_SRC="${NEXUS_SRC:-}"       # optional path to a local nexus checkout to build from
 install_service=1
+from_source=0                    # force building from source instead of downloading
 projects=""
 
 usage() {
@@ -32,14 +37,17 @@ nexus installer
 Options:
   --project <spec-path[:name]>   Project repo to watch. Repeatable.
   --home <path>                  Install location (default: $HOME/.nexus).
-  --ref <ref>                    nexus source ref to build (default: main).
+  --ref <ref>                    nexus version to install (default: latest release).
+                                 A version tag (v1.2.3) downloads that release;
+                                 a branch/other ref builds from source.
+  --from-source                  Build from source instead of downloading.
   --no-service                   Skip systemd/launchctl service setup.
   -h, --help                     Show this help.
 
 Environment:
   NEXUS_HOME   Same as --home.
   NEXUS_REF    Same as --ref.
-  NEXUS_SRC    Build from a local nexus checkout instead of fetching the module.
+  NEXUS_SRC    Build from a local nexus checkout instead of downloading.
 EOF
 }
 
@@ -55,6 +63,7 @@ while [ $# -gt 0 ]; do
 		--home=*) NEXUS_HOME="${1#--home=}"; shift ;;
 		--ref) [ $# -ge 2 ] || die "--ref needs a value"; NEXUS_REF="$2"; shift 2 ;;
 		--ref=*) NEXUS_REF="${1#--ref=}"; shift ;;
+		--from-source) from_source=1; shift ;;
 		--no-service) install_service=0; shift ;;
 		-h|--help) usage; exit 0 ;;
 		*) die "unknown argument: $1 (try --help)" ;;
@@ -62,7 +71,8 @@ while [ $# -gt 0 ]; do
 done
 
 # --- preflight ---
-command -v go >/dev/null 2>&1 || die "'go' is required (install Go >= 1.22)"
+# git is needed at runtime (nexus clones and polls repos). Go is checked lazily,
+# only if we end up building from source.
 command -v git >/dev/null 2>&1 || die "'git' is required"
 
 # NEXUS_HOME may contain ~ or be relative; resolve to an absolute path.
@@ -73,24 +83,79 @@ BIN="$NEXUS_HOME/bin"
 info "installing nexus to $NEXUS_HOME"
 mkdir -p "$BIN" "$NEXUS_HOME/repos" "$NEXUS_HOME/volumes" "$NEXUS_HOME/logs"
 
-# --- build the binaries ---
-# Prefer a local checkout when one is given or when we are run from inside the repo,
-# otherwise fetch and build the module at the requested ref.
+# --- install the binaries ---
+
+is_version() { printf '%s' "$1" | grep -q '^v[0-9]'; }
+
+# detect_platform prints "<os>-<arch>" for the release asset names, or fails on
+# an unsupported OS/arch.
+detect_platform() {
+	_os=$(uname -s | tr '[:upper:]' '[:lower:]')
+	_arch=$(uname -m)
+	case "$_os" in linux|darwin) ;; *) return 1 ;; esac
+	case "$_arch" in
+		x86_64|amd64) _arch=amd64 ;;
+		aarch64|arm64) _arch=arm64 ;;
+		*) return 1 ;;
+	esac
+	printf '%s-%s' "$_os" "$_arch"
+}
+
+# download_prebuilt fetches nexus + nexus-pm from a GitHub release. Returns
+# non-zero (so the caller falls back to source) on any failure.
+download_prebuilt() {
+	platform=$(detect_platform) || { info "no prebuilt binaries for this OS/arch"; return 1; }
+	command -v curl >/dev/null 2>&1 || { info "curl not found; cannot download prebuilt binaries"; return 1; }
+	if is_version "$NEXUS_REF"; then
+		base="$NEXUS_REPO_URL/releases/download/$NEXUS_REF"
+		info "downloading prebuilt nexus $NEXUS_REF ($platform)"
+	else
+		base="$NEXUS_REPO_URL/releases/latest/download"
+		info "downloading prebuilt nexus (latest release, $platform)"
+	fi
+	for b in nexus nexus-pm; do
+		curl -fsSL "$base/$b-$platform" -o "$BIN/.$b.new" || { rm -f "$BIN/.$b.new"; return 1; }
+		chmod +x "$BIN/.$b.new"
+		mv -f "$BIN/.$b.new" "$BIN/$b"
+	done
+	return 0
+}
+
+# build_from_source builds with the Go toolchain — a local checkout, or the
+# module at the requested ref (default: main).
+build_from_source() {
+	command -v go >/dev/null 2>&1 || die "no prebuilt binary available and 'go' is not on PATH — install Go >= 1.22, or pass a released --ref (e.g. --ref v1.0.0)"
+	if [ -n "$NEXUS_SRC" ]; then
+		info "building from local source: $NEXUS_SRC"
+		( cd "$NEXUS_SRC" && GOBIN="$BIN" go install ./cmd/nexus ./cmd/nexus-pm )
+	else
+		src_ref="${NEXUS_REF:-main}"
+		info "building $NEXUS_MODULE@$src_ref"
+		GOBIN="$BIN" go install "$NEXUS_MODULE/cmd/nexus@$src_ref"
+		GOBIN="$BIN" go install "$NEXUS_MODULE/cmd/nexus-pm@$src_ref"
+	fi
+}
+
+# Decide how to install. Prefer prebuilt binaries; fall back to source.
+use_source="$from_source"
+if [ -n "$NEXUS_SRC" ]; then use_source=1; fi
+# Running from inside a nexus checkout → build that local source.
 if [ -z "$NEXUS_SRC" ] && [ -f "./go.mod" ] && grep -q "^module $NEXUS_MODULE\$" ./go.mod 2>/dev/null; then
-	NEXUS_SRC="$(pwd)"
+	NEXUS_SRC="$(pwd)"; use_source=1
+fi
+# A non-version ref names a branch, which has no release — build it from source.
+if [ "$use_source" -eq 0 ] && [ -n "$NEXUS_REF" ] && ! is_version "$NEXUS_REF"; then
+	use_source=1
 fi
 
-if [ -n "$NEXUS_SRC" ]; then
-	info "building from local source: $NEXUS_SRC"
-	( cd "$NEXUS_SRC" && GOBIN="$BIN" go install ./cmd/nexus ./cmd/nexus-pm )
-else
-	info "building $NEXUS_MODULE@$NEXUS_REF"
-	GOBIN="$BIN" go install "$NEXUS_MODULE/cmd/nexus@$NEXUS_REF"
-	GOBIN="$BIN" go install "$NEXUS_MODULE/cmd/nexus-pm@$NEXUS_REF"
+installed=0
+if [ "$use_source" -eq 0 ]; then
+	if download_prebuilt; then installed=1; else info "falling back to building from source"; fi
 fi
+[ "$installed" -eq 1 ] || build_from_source
 
-[ -x "$BIN/nexus" ] || die "build did not produce $BIN/nexus"
-[ -x "$BIN/nexus-pm" ] || die "build did not produce $BIN/nexus-pm"
+[ -x "$BIN/nexus" ] || die "install did not produce $BIN/nexus"
+[ -x "$BIN/nexus-pm" ] || die "install did not produce $BIN/nexus-pm"
 info "installed $BIN/nexus and $BIN/nexus-pm"
 
 # --- register projects ---
