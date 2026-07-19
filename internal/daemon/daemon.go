@@ -266,7 +266,7 @@ func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 		// swapped $NEXUS_HOME/bin/nexus and the SHA is promoted. Ask nexus-pm to
 		// restart the runtime so the new binary is loaded. This SIGTERMs the current
 		// process, so it does not return; user services keep running throughout.
-		if d.isSelf(ps.specPath) {
+		if d.isSelf(ps.specPath, ps.subdir) {
 			d.restartRuntime(ps.address)
 		}
 	}
@@ -394,9 +394,12 @@ func (d *Daemon) stopProjectState(ps *projectState) {
 	d.mu.Unlock()
 }
 
-// isSelf reports whether specPath identifies nexus's own repository.
-func (d *Daemon) isSelf(specPath string) bool {
-	return d.SelfSpecPath != "" && specPath == d.SelfSpecPath
+// isSelf reports whether a project is nexus itself: its spec path is nexus's own
+// repository AND it deploys the whole repo (no subdir). A subdirectory project of
+// the nexus repo — e.g. the web UI at github.com/rdkal/nexus/web — shares the repo
+// root spec path but is not nexus, so it must not trigger a runtime restart.
+func (d *Daemon) isSelf(specPath, subdir string) bool {
+	return d.SelfSpecPath != "" && specPath == d.SelfSpecPath && subdir == ""
 }
 
 // restartRuntime asks nexus-pm to restart the nexus runtime onto the newly built

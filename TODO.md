@@ -84,8 +84,9 @@
 | `nexus.yaml` self-tracking config (build-only, no services) | ✅ | ✅ | ✅ |
 | After self-build deploy, call `POST /runtime/restart` on nexus-pm.sock | ✅ | ✅ | ✅ |
 | Self-identification via spec path (NEXUS_SELF_SPEC override) | ✅ | ✅ | ✅ |
+| Self-identification excludes subdir projects (web UI at `…/nexus/web` ≠ self) | ✅ | ✅ | ✅ |
 | **Web UI (Python / iris)** |
-| `nexus-web` as a normal nexus project (`web/nexus.yaml`, `python -m nexus_web`) | ✅ | ✅ | ✅ |
+| `nexus-web` lives in-repo at `web/`; added via `nexus project add github.com/rdkal/nexus/web` | ✅ | ✅ | ✅ |
 | Unix socket HTTP client (httpx over UDS) wrapping the 7 endpoints | ✅ | ✅ | ✅ |
 | Address-tree build + project-vs-service path resolution | ✅ | ✅ | ✅ |
 | Overview page `/` — project tree, current SHA, health | ✅ | ✅ | ✅ |

@@ -66,7 +66,7 @@ REFS = """\
 """
 
 WEB_UI = """\
-nexus project add github.com/rdkal/nexus-web
+nexus project add github.com/rdkal/nexus/web
 """
 
 
@@ -120,9 +120,13 @@ def page():
                 code(REFS),
                 h.h2["Web UI (optional)"],
                 h.p[
-                    "There's a small dashboard, and it's just another nexus project — "
-                    "add it the same way. It builds, runs on port 7777, and connects to "
-                    "the daemon over its socket:"
+                    "There's a small dashboard, and it's just another nexus project. "
+                    "It lives in the nexus repo under ",
+                    h.code["web/"],
+                    ", so you add it by that subdirectory path — nexus finds the repo, "
+                    "reads ",
+                    h.code["web/nexus.yaml"],
+                    ", and runs it on port 7777 against the daemon socket:",
                 ],
                 code(WEB_UI),
                 h.p[

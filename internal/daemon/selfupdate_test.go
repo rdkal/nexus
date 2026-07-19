@@ -72,19 +72,24 @@ func TestNew_SelfSpecPath(t *testing.T) {
 
 func TestIsSelf(t *testing.T) {
 	d := &Daemon{SelfSpecPath: "github.com/rdkal/nexus"}
-	if !d.isSelf("github.com/rdkal/nexus") {
+	if !d.isSelf("github.com/rdkal/nexus", "") {
 		t.Error("expected match for the configured self spec path")
 	}
-	if d.isSelf("github.com/other/repo") {
+	if d.isSelf("github.com/other/repo", "") {
 		t.Error("unexpected match for a different spec path")
+	}
+	// A subdirectory project of the nexus repo (e.g. the web UI at .../nexus/web)
+	// shares the repo-root spec path but is NOT nexus itself.
+	if d.isSelf("github.com/rdkal/nexus", "web") {
+		t.Error("a subdir project of the nexus repo must not be treated as self")
 	}
 
 	// An empty SelfSpecPath disables self detection entirely.
 	d.SelfSpecPath = ""
-	if d.isSelf("") {
+	if d.isSelf("", "") {
 		t.Error("empty SelfSpecPath must not match the empty string")
 	}
-	if d.isSelf("github.com/rdkal/nexus") {
+	if d.isSelf("github.com/rdkal/nexus", "") {
 		t.Error("empty SelfSpecPath must not match any path")
 	}
 }
