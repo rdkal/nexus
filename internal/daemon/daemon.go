@@ -327,12 +327,26 @@ func (d *Daemon) startChild(ctx context.Context, parent *projectState, ext confi
 		slog.Error("daemon: sub-project current SHA lookup failed", "address", childAddr, "err", err)
 	}
 
+	// An external sub-project's src may point at a subdirectory of a repo, just
+	// like a root project's spec path. Walk up to split it into repo root + subdir.
+	// On a probe failure (offline), assume a repo-root path — matching a src that
+	// has no subdir (the common case) exactly, so only genuine subdir sub-projects
+	// are affected by an offline restart.
+	specPath, subdir := ext.Src, ""
+	if root, sub, rerr := git.ResolveRepoRoot(ext.Src); rerr == nil {
+		specPath, subdir = root, sub
+	} else {
+		slog.Warn("daemon: could not resolve sub-project repo root; assuming repo-root",
+			"src", ext.Src, "err", rerr)
+	}
+
 	child := &projectState{
 		address:      childAddr,
-		specPath:     ext.Src,
+		specPath:     specPath,
 		rootSpecPath: parent.rootSpecPath,
 		ref:          ref,
 		aliases:      aliases,
+		subdir:       subdir,
 		recoverSHA:   sha,
 		queue:        &poller.Queue{},
 		svcSpecs:     make(map[string]supervisor.ServiceSpec),

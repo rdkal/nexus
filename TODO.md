@@ -31,6 +31,7 @@
 | Wildcard tag ref `@<glob>` — highest semver tag matching the pattern (any scheme) | ✅ | ✅ | ✅ |
 | Per-app ref isolation — a non-matching (other-app) tag must not redeploy | ✅ | ✅ | ✅ |
 | Subdirectory spec path via walk-up repo discovery — `nexus.yaml` under a repo subpath | ✅ | ✅ | ✅ |
+| External sub-project `src` may point at a subdirectory (walk-up in daemon) | ✅ | ✅ | ✅ |
 | `projects.subdir` column + migration for existing DBs | ✅ | ✅ | ✅ |
 | Path-scoped change detection for branch refs — redeploy only when the app's subtree changed | | | |
 | **Deployment lifecycle** |
