@@ -105,10 +105,10 @@ def page():
                 h.h2["Install"],
                 h.p[
                     "One line. Needs ",
-                    h.code["go"],
-                    " (≥ 1.22) and ",
                     h.code["git"],
-                    " on your PATH — no root, no prebuilt binaries.",
+                    " and ",
+                    h.code["curl"],
+                    " on your PATH — no root, no Go toolchain. It downloads prebuilt binaries.",
                 ],
                 code(INSTALL),
                 h.p["Add or remove projects any time after install:"],

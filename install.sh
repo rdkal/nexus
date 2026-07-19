@@ -7,21 +7,20 @@
 #     --project github.com/myorg/system-b:custom-name
 #
 # What it does:
-#   1. Builds nexus-pm and nexus into $NEXUS_HOME/bin
+#   1. Downloads prebuilt nexus-pm and nexus into $NEXUS_HOME/bin
 #   2. Creates the $NEXUS_HOME directory structure
 #   3. Registers each --project repo
 #   4. Installs and starts a user-mode service pointing at nexus-pm
 #
-# Requirements: go (>= 1.22) and git on PATH. No root required.
+# Requirements: git and curl on PATH. No Go toolchain, no root.
 
 set -eu
 
-NEXUS_MODULE="github.com/rdkal/nexus"
+NEXUS_REPO_URL="https://github.com/rdkal/nexus"
 
 # --- configuration (overridable via env or flags) ---
 NEXUS_HOME="${NEXUS_HOME:-$HOME/.nexus}"
-NEXUS_REF="${NEXUS_REF:-main}"   # branch/tag/version to build when fetching from the module
-NEXUS_SRC="${NEXUS_SRC:-}"       # optional path to a local nexus checkout to build from
+NEXUS_REF="${NEXUS_REF:-}"       # version to install (empty = latest release)
 install_service=1
 projects=""
 
@@ -32,14 +31,14 @@ nexus installer
 Options:
   --project <spec-path[:name]>   Project repo to watch. Repeatable.
   --home <path>                  Install location (default: $HOME/.nexus).
-  --ref <ref>                    nexus source ref to build (default: main).
+  --ref <version>                nexus version to install (default: latest release),
+                                 e.g. --ref v1.2.3.
   --no-service                   Skip systemd/launchctl service setup.
   -h, --help                     Show this help.
 
 Environment:
   NEXUS_HOME   Same as --home.
   NEXUS_REF    Same as --ref.
-  NEXUS_SRC    Build from a local nexus checkout instead of fetching the module.
 EOF
 }
 
@@ -62,8 +61,9 @@ while [ $# -gt 0 ]; do
 done
 
 # --- preflight ---
-command -v go >/dev/null 2>&1 || die "'go' is required (install Go >= 1.22)"
+# git is needed at runtime (nexus clones and polls repos); curl downloads binaries.
 command -v git >/dev/null 2>&1 || die "'git' is required"
+command -v curl >/dev/null 2>&1 || die "'curl' is required"
 
 # NEXUS_HOME may contain ~ or be relative; resolve to an absolute path.
 mkdir -p "$NEXUS_HOME"
@@ -73,24 +73,40 @@ BIN="$NEXUS_HOME/bin"
 info "installing nexus to $NEXUS_HOME"
 mkdir -p "$BIN" "$NEXUS_HOME/repos" "$NEXUS_HOME/volumes" "$NEXUS_HOME/logs"
 
-# --- build the binaries ---
-# Prefer a local checkout when one is given or when we are run from inside the repo,
-# otherwise fetch and build the module at the requested ref.
-if [ -z "$NEXUS_SRC" ] && [ -f "./go.mod" ] && grep -q "^module $NEXUS_MODULE\$" ./go.mod 2>/dev/null; then
-	NEXUS_SRC="$(pwd)"
-fi
+# --- download the prebuilt binaries ---
 
-if [ -n "$NEXUS_SRC" ]; then
-	info "building from local source: $NEXUS_SRC"
-	( cd "$NEXUS_SRC" && GOBIN="$BIN" go install ./cmd/nexus ./cmd/nexus-pm )
+# detect_platform prints "<os>-<arch>" for the release asset names.
+detect_platform() {
+	_os=$(uname -s | tr '[:upper:]' '[:lower:]')
+	_arch=$(uname -m)
+	case "$_os" in linux|darwin) ;; *) return 1 ;; esac
+	case "$_arch" in
+		x86_64|amd64) _arch=amd64 ;;
+		aarch64|arm64) _arch=arm64 ;;
+		*) return 1 ;;
+	esac
+	printf '%s-%s' "$_os" "$_arch"
+}
+
+platform=$(detect_platform) || die "no prebuilt binaries for $(uname -s)/$(uname -m)"
+
+if [ -n "$NEXUS_REF" ]; then
+	base="$NEXUS_REPO_URL/releases/download/$NEXUS_REF"
+	info "downloading prebuilt nexus $NEXUS_REF ($platform)"
 else
-	info "building $NEXUS_MODULE@$NEXUS_REF"
-	GOBIN="$BIN" go install "$NEXUS_MODULE/cmd/nexus@$NEXUS_REF"
-	GOBIN="$BIN" go install "$NEXUS_MODULE/cmd/nexus-pm@$NEXUS_REF"
+	base="$NEXUS_REPO_URL/releases/latest/download"
+	info "downloading prebuilt nexus (latest release, $platform)"
 fi
 
-[ -x "$BIN/nexus" ] || die "build did not produce $BIN/nexus"
-[ -x "$BIN/nexus-pm" ] || die "build did not produce $BIN/nexus-pm"
+for b in nexus nexus-pm; do
+	curl -fsSL "$base/$b-$platform" -o "$BIN/.$b.new" \
+		|| { rm -f "$BIN/.$b.new"; die "could not download $b ($platform) from $base — is there a published release?"; }
+	chmod +x "$BIN/.$b.new"
+	mv -f "$BIN/.$b.new" "$BIN/$b"
+done
+
+[ -x "$BIN/nexus" ] || die "install did not produce $BIN/nexus"
+[ -x "$BIN/nexus-pm" ] || die "install did not produce $BIN/nexus-pm"
 info "installed $BIN/nexus and $BIN/nexus-pm"
 
 # --- register projects ---
