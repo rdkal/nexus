@@ -11,13 +11,25 @@ import dataclasses
 import sys
 from pathlib import Path
 
-from iris import LIGHT, Container, Panel, Stack, h, render
+from iris import LIGHT, Container, Panel, Stack, h, raw, render
 from iris import Page
 
 REPO = "https://github.com/rdkal/nexus"
 
 # A touch wider than the default measure so code blocks aren't cramped.
 THEME = dataclasses.replace(LIGHT, measure="54rem")
+
+# iris ships no <pre> styling, so long lines would overflow the page. Keep code
+# blocks full-width and scroll them horizontally instead of wrapping.
+EXTRA_CSS = """
+pre.code {
+  margin: 0;
+  white-space: pre;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  tab-size: 2;
+}
+"""
 
 INSTALL = """\
 curl https://github.com/rdkal/nexus/raw/main/install.sh | sh -s -- \\
@@ -76,6 +88,7 @@ def code(text: str):
 
 def page():
     return Page(title="nexus — git-driven deployments", theme=THEME)[
+        h.style[raw(EXTRA_CSS)],
         Container[
             Stack(gap=1)[
                 h.h1["nexus"],
