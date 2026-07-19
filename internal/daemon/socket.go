@@ -27,6 +27,7 @@ import (
 func (d *Daemon) newMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /projects", d.handleListProjects)
+	mux.HandleFunc("POST /projects", d.handleReconcile)
 	mux.HandleFunc("GET /projects/{rest...}", d.handleProjectGet)
 	mux.HandleFunc("POST /projects/{rest...}", d.handleProjectPost)
 	return mux
@@ -65,6 +66,14 @@ func splitRoute(rest string) (action, addr, svc string) {
 	}
 
 	return "detail", rest, ""
+}
+
+// handleReconcile re-syncs root projects from the DB (start added, stop removed).
+// Called by `nexus project add`/`remove`. Runs in the background so the CLI gets a
+// fast reply; the actual clone/start happens under the daemon's own context.
+func (d *Daemon) handleReconcile(w http.ResponseWriter, r *http.Request) {
+	go d.reconcileRoots()
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // handleProjectGet dispatches GET requests under /projects/.

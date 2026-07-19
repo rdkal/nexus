@@ -202,14 +202,34 @@ else
 	manual_instructions
 fi
 
+# --- PATH setup ---
+# Put $BIN on PATH so `nexus` works without a full path. Idempotently append to
+# the shell rc files that exist, plus ~/.profile for login shells.
+on_path=0
+case ":${PATH}:" in *":$BIN:"*) on_path=1 ;; esac
+if [ "$on_path" -eq 0 ]; then
+	line="export PATH=\"$BIN:\$PATH\"   # added by nexus installer"
+	updated=""
+	for rc in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do
+		[ -e "$rc" ] || { [ "$rc" = "$HOME/.profile" ] || continue; : > "$rc"; }
+		grep -qF "$BIN" "$rc" 2>/dev/null && continue
+		printf '\n%s\n' "$line" >> "$rc"
+		updated="$updated $rc"
+	done
+	[ -n "$updated" ] && info "added $BIN to PATH in:$updated"
+fi
+
 info "done"
 cat <<EOF
 
-Add a project to start deploying:
+Add a project to start deploying (open a new terminal, or run the line above first):
 
-    $BIN/nexus project add <spec-path>
+    nexus project add <spec-path>
 
 for example the web dashboard (serves on port 7777):
 
-    $BIN/nexus project add github.com/rdkal/nexus/web
+    nexus project add github.com/rdkal/nexus/web
 EOF
+if [ "$on_path" -eq 0 ]; then
+	printf '\nTo use nexus in this shell now, run:\n\n    export PATH="%s:$PATH"\n' "$BIN"
+fi

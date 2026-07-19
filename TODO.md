@@ -13,6 +13,8 @@
 | launchctl plist registration (macOS) — points to `nexus-pm` | ✅ | ✅ | |
 | Install & self-update without host Go — CI (`release.yml`) builds release binaries; `install.sh` and self-update download them (prebuilt only, no source fallback) | ✅ | ✅ | ✅ |
 | Install registers no projects — `nexus project add` is a separate step afterwards | ✅ | ✅ | ✅ |
+| Installer adds `$NEXUS_HOME/bin` to `PATH` (idempotent `~/.profile`/`~/.bashrc`/`~/.zshrc`) | ✅ | ✅ | |
+| `project add`/`remove` reconcile the running daemon live (`POST /projects`) — no restart | ✅ | ✅ | ✅ |
 | **Configuration** |
 | `nexus.yaml` parser (external projects, inline projects, recursive `projects:`) | ✅ | ✅ | ✅ |
 | Project name inference from spec path (final segment default) | ✅ | ✅ | ✅ |
@@ -23,7 +25,8 @@
 | Drop the mandatory `@` ref prefix — bare refs (`main`, `v15`, `latest`, `web-v*`); `@` only as the `spec@ref` separator | ✅ | ✅ | ✅ |
 | **Git layer** |
 | Bare clone at spec path under `repos/` | ✅ | ✅ | ✅ |
-| Git transport resolution from git CLI config (SSH/HTTPS/local) | ✅ | ✅ | ✅ |
+| Git transport resolution — try spec as-is (honours `insteadOf`), then HTTPS, then SSH; store the working clone URL | ✅ | ✅ | ✅ |
+| Reject an unresolvable spec at `nexus project add` instead of silently storing it | ✅ | ✅ | ✅ |
 | 30-second polling loop via `git ls-remote` | ✅ | ✅ | ✅ |
 | `@<branch>` ref resolution (branch tip SHA) | ✅ | ✅ | ✅ |
 | `@<tag>` ref resolution (exact tag SHA) | ✅ | ✅ | ✅ |

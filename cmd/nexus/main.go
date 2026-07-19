@@ -3,9 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -16,6 +19,31 @@ import (
 	"github.com/rdkal/nexus/internal/spec"
 	"github.com/rdkal/nexus/internal/supervisor"
 )
+
+// notifyDaemon asks a running daemon to reconcile projects from the DB (start
+// newly-added, stop removed) over its Unix socket. Best-effort: if the daemon is
+// not running, the change still takes effect the next time it starts.
+func notifyDaemon(homeFlag string) {
+	homeDir, err := resolveHome(homeFlag)
+	if err != nil {
+		return
+	}
+	sock := home.NewPaths(homeDir).Socket
+	client := &http.Client{
+		Timeout: 3 * time.Second,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", sock)
+			},
+		},
+	}
+	resp, err := client.Post("http://nexus/projects", "", nil)
+	if err != nil {
+		return
+	}
+	_ = resp.Body.Close()
+}
 
 func main() {
 	if err := rootCmd().Execute(); err != nil {
@@ -99,13 +127,13 @@ func projectAddCmd(homeFlag *string) *cobra.Command {
 
 			// Discover the git repo within the spec path by walking up (Go-style):
 			// a monorepo app can be given as github.com/org/repo/services/api, which
-			// resolves to repo root github.com/org/repo + subdir services/api. If the
-			// repo can't be probed (offline / auth), assume a repo-root path — the
-			// daemon will surface any real problem when it clones.
+			// resolves to repo root github.com/org/repo + subdir services/api, and
+			// the transport (https/ssh) is resolved here too. Reject an unresolvable
+			// spec now rather than storing a project that can never deploy.
 			root, subdir, rerr := git.ResolveRepoRoot(string(specPath))
 			if rerr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not resolve repo root (%v); assuming %q is a repo root\n", rerr, specPath)
-				root, subdir = string(specPath), ""
+				return fmt.Errorf("could not find a git repository for %q: %w\n"+
+					"check the spec path, your network, and git credentials (e.g. an SSH key or a token in git's credential helper)", specPath, rerr)
 			}
 
 			database, err := openDB(*homeFlag)
@@ -127,6 +155,7 @@ func projectAddCmd(homeFlag *string) *cobra.Command {
 			} else {
 				fmt.Printf("added project %q  src=%s  ref=%s\n", name, root, ref)
 			}
+			notifyDaemon(*homeFlag) // ask a running daemon to start it now
 			return nil
 		},
 	}
@@ -150,6 +179,7 @@ func projectRemoveCmd(homeFlag *string) *cobra.Command {
 				return err
 			}
 			fmt.Printf("removed project %q\n", args[0])
+			notifyDaemon(*homeFlag) // ask a running daemon to stop it now
 			return nil
 		},
 	}
