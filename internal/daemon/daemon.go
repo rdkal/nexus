@@ -65,6 +65,7 @@ type projectState struct {
 	rootSpecPath string // root deployment's spec path (for worktree placement)
 	ref          string // ref being tracked (e.g. "@main")
 	aliases      []string // alias chain from root; nil for root projects
+	subdir       string   // in-repo path to this app's nexus.yaml ("" = repo root)
 	recoverSHA   string   // SHA to recover on startup ("" = never deployed)
 
 	queue  *poller.Queue
@@ -107,6 +108,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			specPath:     p.SpecPath,
 			rootSpecPath: p.SpecPath,
 			ref:          p.Ref,
+			subdir:       p.Subdir,
 			recoverSHA:   p.CurrentSHA,
 			queue:        &poller.Queue{},
 			svcSpecs:     make(map[string]supervisor.ServiceSpec),
@@ -149,17 +151,18 @@ func (d *Daemon) startProjectState(ctx context.Context, ps *projectState) error 
 func (d *Daemon) recoverProject(ctx context.Context, ps *projectState) {
 	sha := ps.recoverSHA
 	worktree := d.Paths.WorktreeDir(ps.rootSpecPath, ps.aliases, sha)
+	appDir := filepath.Join(worktree, ps.subdir)
 
-	cfg, err := config.Parse(filepath.Join(worktree, "nexus.yaml"))
+	cfg, err := config.Parse(filepath.Join(appDir, "nexus.yaml"))
 	if err != nil {
 		slog.Warn("daemon: recover skipped (no worktree config)",
-			"address", ps.address, "worktree", worktree, "err", err)
+			"address", ps.address, "dir", appDir, "err", err)
 		return
 	}
 
 	// Recover every service, including those of inline sub-projects, by re-spawning
 	// from the flattened config. Spawn is a no-op for services nexus-pm still runs.
-	specs := d.flattenedSpecs(ps.address, ps.ref, sha, worktree, cfg)
+	specs := d.flattenedSpecs(ps.address, ps.ref, sha, appDir, cfg)
 	for relName, spec := range specs {
 		d.Sup.Spawn(serviceKey(ps.address, relName), spec)
 	}
@@ -222,6 +225,7 @@ func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 			SpecPath:     ps.specPath,
 			RootSpecPath: ps.rootSpecPath,
 			Aliases:      ps.aliases,
+			Subdir:       ps.subdir,
 			NewSHA:       sha,
 			PrevSHA:      prevSHA,
 			PrevConfig:   prevCfg,
@@ -235,13 +239,14 @@ func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 		// Capture flattened service specs (including inline sub-projects) so manual
 		// restarts can re-spawn with the same config. Deploy already spawned them.
 		newWorktree := d.Paths.WorktreeDir(ps.rootSpecPath, ps.aliases, sha)
-		cfg, reloadErr := config.Parse(filepath.Join(newWorktree, "nexus.yaml"))
+		appDir := filepath.Join(newWorktree, ps.subdir)
+		cfg, reloadErr := config.Parse(filepath.Join(appDir, "nexus.yaml"))
 		if reloadErr != nil {
 			slog.Error("daemon: post-deploy config reload failed", "address", ps.address, "err", reloadErr)
 			cfg = &config.ProjectFile{}
 		}
 
-		specs := d.flattenedSpecs(ps.address, ps.ref, sha, newWorktree, cfg)
+		specs := d.flattenedSpecs(ps.address, ps.ref, sha, appDir, cfg)
 
 		ps.mu.Lock()
 		ps.sha = sha
@@ -399,13 +404,13 @@ func (d *Daemon) restartRuntime(project string) {
 // flattenedSpecs builds the service specs for a project and its inline sub-projects,
 // keyed by each service's address relative to the project (e.g. "api" or
 // "metrics/exporter"). The full supervisor key is serviceKey(address, relName).
-func (d *Daemon) flattenedSpecs(address, ref, sha, worktree string, cfg *config.ProjectFile) map[string]supervisor.ServiceSpec {
+func (d *Daemon) flattenedSpecs(address, ref, sha, appDir string, cfg *config.ProjectFile) map[string]supervisor.ServiceSpec {
 	units, _ := cfg.Flatten()
 	specs := make(map[string]supervisor.ServiceSpec)
 	for _, u := range units {
 		relPrefix := strings.Join(u.RelPath, "/")
 		uAddr := subAddress(address, u.RelPath)
-		env := d.unitEnv(uAddr, ref, sha, worktree, u.Volumes)
+		env := d.unitEnv(uAddr, ref, sha, appDir, u.Volumes)
 		for name, svc := range u.Services {
 			relName := name
 			if relPrefix != "" {
@@ -414,7 +419,7 @@ func (d *Daemon) flattenedSpecs(address, ref, sha, worktree string, cfg *config.
 			key := serviceKey(address, relName)
 			specs[relName] = supervisor.ServiceSpec{
 				Command: svc.Run,
-				WorkDir: worktree,
+				WorkDir: appDir,
 				Env:     env,
 				LogFile: d.Paths.ServiceLog(key),
 			}

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -14,7 +15,8 @@ CREATE TABLE IF NOT EXISTS projects (
     name        TEXT PRIMARY KEY,
     spec_path   TEXT NOT NULL,
     ref         TEXT NOT NULL DEFAULT '@main',
-    current_sha TEXT
+    current_sha TEXT,
+    subdir      TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS deployments (
@@ -69,7 +71,26 @@ func Open(path string) (*DB, error) {
 		conn.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+	if err := migrate(conn); err != nil {
+		conn.Close()
+		return nil, err
+	}
 	return &DB{conn: conn}, nil
+}
+
+// migrate applies additive schema changes to databases created by older versions.
+// Each step is idempotent — a duplicate-column error means the column already
+// exists (a fresh DB created it via the schema above), which is not an error.
+func migrate(conn *sql.DB) error {
+	steps := []string{
+		`ALTER TABLE projects ADD COLUMN subdir TEXT NOT NULL DEFAULT ''`,
+	}
+	for _, stmt := range steps {
+		if _, err := conn.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("migrate %q: %w", stmt, err)
+		}
+	}
+	return nil
 }
 
 // Close closes the database connection.
@@ -78,16 +99,17 @@ func (d *DB) Close() error { return d.conn.Close() }
 // Project is a root-level project tracked by nexus.
 type Project struct {
 	Name       string
-	SpecPath   string
+	SpecPath   string // git repo root (cloneable); the part before any subdir
 	Ref        string
 	CurrentSHA string // empty until first successful deployment
+	Subdir     string // in-repo path to the app's nexus.yaml ("" = repo root)
 }
 
 // AddProject inserts a new project. Returns an error if the name is already in use.
 func (d *DB) AddProject(p Project) error {
 	_, err := d.conn.Exec(
-		`INSERT INTO projects (name, spec_path, ref) VALUES (?, ?, ?)`,
-		p.Name, p.SpecPath, p.Ref,
+		`INSERT INTO projects (name, spec_path, ref, subdir) VALUES (?, ?, ?, ?)`,
+		p.Name, p.SpecPath, p.Ref, p.Subdir,
 	)
 	if err != nil {
 		return fmt.Errorf("add project %q: %w", p.Name, err)
@@ -111,7 +133,7 @@ func (d *DB) RemoveProject(name string) error {
 // ListProjects returns all tracked root projects ordered by name.
 func (d *DB) ListProjects() ([]Project, error) {
 	rows, err := d.conn.Query(
-		`SELECT name, spec_path, ref, COALESCE(current_sha, '') FROM projects ORDER BY name`,
+		`SELECT name, spec_path, ref, COALESCE(current_sha, ''), subdir FROM projects ORDER BY name`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)
@@ -121,7 +143,7 @@ func (d *DB) ListProjects() ([]Project, error) {
 	var out []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.Name, &p.SpecPath, &p.Ref, &p.CurrentSHA); err != nil {
+		if err := rows.Scan(&p.Name, &p.SpecPath, &p.Ref, &p.CurrentSHA, &p.Subdir); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -161,10 +183,10 @@ func (d *DB) FinishDeployment(id int64, status string, finishedAt time.Time) err
 // GetProject returns a single project by name.
 func (d *DB) GetProject(name string) (Project, error) {
 	row := d.conn.QueryRow(
-		`SELECT name, spec_path, ref, COALESCE(current_sha, '') FROM projects WHERE name = ?`, name,
+		`SELECT name, spec_path, ref, COALESCE(current_sha, ''), subdir FROM projects WHERE name = ?`, name,
 	)
 	var p Project
-	if err := row.Scan(&p.Name, &p.SpecPath, &p.Ref, &p.CurrentSHA); err != nil {
+	if err := row.Scan(&p.Name, &p.SpecPath, &p.Ref, &p.CurrentSHA, &p.Subdir); err != nil {
 		return Project{}, fmt.Errorf("get project %q: %w", name, err)
 	}
 	return p, nil

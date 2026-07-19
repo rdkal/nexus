@@ -101,6 +101,44 @@ func ResolveRef(repoDir, ref string) (string, error) {
 	return ParseLsRemoteOutput(out, name)
 }
 
+// ResolveRepoRoot discovers the git repository within a spec path by walking up.
+// It probes candidate remotes from the full path down to the shortest and returns
+// the first that is a reachable git repo as the repo root, with the remaining
+// trailing segments as the in-repo subdirectory. This lets a monorepo app be
+// referenced by a single path like "github.com/org/repo/services/api" (repo root
+// "github.com/org/repo", subdir "services/api"), exactly as Go resolves a module
+// in a subdirectory. A path that is itself a repo resolves on the first probe
+// with an empty subdir, so ordinary projects pay only one ls-remote.
+func ResolveRepoRoot(specPath string) (root, subdir string, err error) {
+	specPath = strings.TrimRight(specPath, "/")
+	if specPath == "" {
+		return "", "", fmt.Errorf("spec path cannot be empty")
+	}
+	segs := strings.Split(specPath, "/")
+	for i := len(segs); i >= 1; i-- {
+		candidate := strings.Join(segs[:i], "/")
+		if candidate == "" {
+			continue // skip empty prefixes from a scheme like file://
+		}
+		if remoteExists(candidate) {
+			return candidate, strings.Join(segs[i:], "/"), nil
+		}
+	}
+	return "", "", fmt.Errorf("no git repository found for spec path %q", specPath)
+}
+
+// remoteExists reports whether remote is a reachable git repository. Credential
+// and SSH prompts are disabled so a probe of a non-existent path fails fast
+// instead of hanging.
+func remoteExists(remote string) bool {
+	cmd := exec.Command("git", "ls-remote", "--quiet", remote, "HEAD")
+	cmd.Env = append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_SSH_COMMAND=ssh -oBatchMode=yes",
+	)
+	return cmd.Run() == nil
+}
+
 func isBareClone(dir string) bool {
 	info, err := os.Stat(filepath.Join(dir, "HEAD"))
 	return err == nil && !info.IsDir()

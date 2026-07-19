@@ -63,9 +63,10 @@ type Request struct {
 	Ref     string // ref being tracked, injected as NEXUS_REF (e.g. "@main")
 
 	// Git coordinates
-	SpecPath     string   // spec path of this project's own git repo
+	SpecPath     string   // spec path of this project's own git repo (repo root)
 	RootSpecPath string   // spec path of the root deployment (for worktree placement)
 	Aliases      []string // alias chain from root to this project; nil for root projects
+	Subdir       string   // in-repo path to this app's nexus.yaml ("" = repo root)
 
 	// Deployment SHAs
 	NewSHA  string
@@ -121,6 +122,11 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 	if req.PrevSHA != "" {
 		prevWorktree = d.Paths.WorktreeDir(req.RootSpecPath, req.Aliases, req.PrevSHA)
 	}
+	// The worktree is the whole checkout; the app's nexus.yaml, build, and services
+	// live in its subdirectory (Subdir is "" for a repo-root project, so newDir ==
+	// newWorktree in that case). git worktree add/remove still operate on the
+	// checkout root above.
+	newDir := filepath.Join(newWorktree, req.Subdir)
 
 	// A redeploy of the currently-active SHA resolves the new and previous worktree
 	// to the same path. In that case we reuse the existing worktree instead of
@@ -148,9 +154,9 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 		}
 	}
 
-	// LOAD CONFIG from the new worktree and flatten it (plus the previous config)
+	// LOAD CONFIG from the app's directory and flatten it (plus the previous config)
 	// into inline units to deploy atomically.
-	cfg, err := loadConfig(newWorktree)
+	cfg, err := loadConfig(newDir)
 	if err != nil {
 		removeNewWorktree()
 		return fmt.Errorf("load config: %w", err)
@@ -175,9 +181,9 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 			continue
 		}
 		uAddr := unitAddress(req.Address, u.RelPath)
-		env := d.unitEnv(uAddr, req.Ref, req.NewSHA, newWorktree, u.Volumes)
+		env := d.unitEnv(uAddr, req.Ref, req.NewSHA, newDir, u.Volumes)
 		buildLog := d.Paths.BuildLog(uAddr, req.NewSHA)
-		if err := runBuild(u.Build, newWorktree, env, buildLog); err != nil {
+		if err := runBuild(u.Build, newDir, env, buildLog); err != nil {
 			removeNewWorktree()
 			_ = d.DB.FinishDeployment(depID, "failed", time.Now())
 			return fmt.Errorf("build %s: %w", uAddr, err)
@@ -190,12 +196,12 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 	// STARTUP: spawn services for every unit from the new worktree.
 	for _, u := range newUnits {
 		uAddr := unitAddress(req.Address, u.RelPath)
-		env := d.unitEnv(uAddr, req.Ref, req.NewSHA, newWorktree, u.Volumes)
+		env := d.unitEnv(uAddr, req.Ref, req.NewSHA, newDir, u.Volumes)
 		for name, svc := range u.Services {
 			key := serviceKey(uAddr, name)
 			d.Sup.Spawn(key, supervisor.ServiceSpec{
 				Command: svc.Run,
-				WorkDir: newWorktree,
+				WorkDir: newDir,
 				Env:     env,
 				LogFile: d.Paths.ServiceLog(key),
 			})
@@ -241,16 +247,17 @@ func (d *Deployer) rollback(
 	// Stop new (failed) services across all units.
 	d.stopUnits(req.Address, newUnits)
 
-	// Re-spawn old services (across all units) from the previous worktree.
+	// Re-spawn old services (across all units) from the previous worktree's app dir.
 	if prevWorktree != "" {
+		prevDir := filepath.Join(prevWorktree, req.Subdir)
 		for _, u := range prevUnits {
 			uAddr := unitAddress(req.Address, u.RelPath)
-			env := d.unitEnv(uAddr, req.Ref, req.PrevSHA, prevWorktree, u.Volumes)
+			env := d.unitEnv(uAddr, req.Ref, req.PrevSHA, prevDir, u.Volumes)
 			for name, svc := range u.Services {
 				key := serviceKey(uAddr, name)
 				d.Sup.Spawn(key, supervisor.ServiceSpec{
 					Command: svc.Run,
-					WorkDir: prevWorktree,
+					WorkDir: prevDir,
 					Env:     env,
 					LogFile: d.Paths.ServiceLog(key),
 				})
