@@ -87,9 +87,14 @@ func projectAddCmd(homeFlag *string) *cobra.Command {
 		Short: "Add a root project",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			specPath, name, err := spec.ParseAddArg(args[0])
+			specPath, argRef, name, err := spec.ParseAddArg(args[0])
 			if err != nil {
 				return err
+			}
+			// A ref in the arg (spec@ref) wins over the --ref flag.
+			ref := refFlag
+			if argRef != "" {
+				ref = argRef
 			}
 
 			// Discover the git repo within the spec path by walking up (Go-style):
@@ -112,20 +117,20 @@ func projectAddCmd(homeFlag *string) *cobra.Command {
 			if err := database.AddProject(db.Project{
 				Name:     name,
 				SpecPath: root,
-				Ref:      refFlag,
+				Ref:      ref,
 				Subdir:   subdir,
 			}); err != nil {
 				return err
 			}
 			if subdir != "" {
-				fmt.Printf("added project %q  repo=%s  subdir=%s  ref=%s\n", name, root, subdir, refFlag)
+				fmt.Printf("added project %q  repo=%s  subdir=%s  ref=%s\n", name, root, subdir, ref)
 			} else {
-				fmt.Printf("added project %q  src=%s  ref=%s\n", name, root, refFlag)
+				fmt.Printf("added project %q  src=%s  ref=%s\n", name, root, ref)
 			}
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&refFlag, "ref", "@main", "ref to track (@main, @v15, @latest, or a tag glob like @web-v*)")
+	cmd.Flags().StringVar(&refFlag, "ref", "main", "ref to track: a branch (main), tag (v15), latest, or a tag glob (web-v*)")
 	return cmd
 }
 

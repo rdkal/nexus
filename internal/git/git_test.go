@@ -281,3 +281,27 @@ func TestResolveRepoRoot(t *testing.T) {
 		t.Error("expected error for a nonexistent repo path")
 	}
 }
+
+// TestResolveRef_BareAndAtPrefix verifies refs work with or without a leading @.
+func TestResolveRef_BareAndAtPrefix(t *testing.T) {
+	upstream := makeUpstream(t)
+	addTag(t, upstream, "v1.0.0")
+	cloneDir := filepath.Join(t.TempDir(), "bare")
+	if err := git.EnsureBareClone(cloneDir, upstream); err != nil {
+		t.Fatalf("EnsureBareClone: %v", err)
+	}
+
+	for _, ref := range []string{"main", "@main", "latest", "@latest"} {
+		sha, err := git.ResolveRef(cloneDir, ref)
+		if err != nil {
+			t.Errorf("ResolveRef(%q): %v", ref, err)
+			continue
+		}
+		if len(sha) < 7 {
+			t.Errorf("ResolveRef(%q) short sha %q", ref, sha)
+		}
+	}
+	if _, err := git.ResolveRef(cloneDir, "@"); err == nil {
+		t.Error("ResolveRef(\"@\") should error (empty ref)")
+	}
+}

@@ -66,20 +66,20 @@ func WorktreeRemove(repoDir, path string) error {
 // ResolveRef resolves a nexus ref to a commit SHA by running git ls-remote
 // against origin in the bare clone at repoDir. Supported forms:
 //
-//	@main        branch tip (refs/heads/main)
-//	@v1.2.3      exact tag (refs/tags/v1.2.3), or branch of the same name
-//	@latest      highest semver tag across all tags
-//	@<glob>      highest semver tag matching a glob, e.g. @web-v*, @v2.* —
-//	             the user's own tag scheme, matched against refs/tags/<glob>
+//	main        branch tip (refs/heads/main)
+//	v1.2.3      exact tag (refs/tags/v1.2.3), or branch of the same name
+//	latest      highest semver tag across all tags
+//	<glob>      highest semver tag matching a glob, e.g. web-v*, v2.* —
+//	            the user's own tag scheme, matched against refs/tags/<glob>
 //
 // A ref containing '*' is a tag glob: it never matches a branch. This lets one
 // app in a monorepo track only its own tags (whatever prefix it uses) without
 // nexus imposing a tag convention.
+//
+// A leading '@' is accepted but optional — it only has meaning as the separator
+// in the "<spec>@<ref>" shorthand, not as a standalone prefix.
 func ResolveRef(repoDir, ref string) (string, error) {
-	if !strings.HasPrefix(ref, "@") {
-		return "", fmt.Errorf("ref %q must start with @", ref)
-	}
-	name := ref[1:]
+	name := strings.TrimPrefix(ref, "@")
 	if name == "" {
 		return "", fmt.Errorf("ref cannot be empty")
 	}
