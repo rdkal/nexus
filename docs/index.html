@@ -635,4 +635,4 @@ projects:
         run: ./exporter</pre></div><h3>Ref syntax</h3><p>The tracked ref (set with <code>--ref</code>, or per sub-project via <code>ref:</code>) always starts with <code>@</code>:</p><div class="panel"><pre class="code">@main       track a branch — deploys on every push
 @v1.2.3     pin an exact tag
 @latest     the newest semver tag
-@web-v*     newest tag matching a glob — one app in a monorepo</pre></div></div></div></body></html>
+@web-v*     newest tag matching a glob — one app in a monorepo</pre></div><h2>Web UI (optional)</h2><p>There&#39;s a small dashboard, and it&#39;s just another nexus project — add it the same way. It builds, runs on port 7777, and connects to the daemon over its socket:</p><div class="panel"><pre class="code">nexus project add github.com/rdkal/nexus-web</pre></div><p>It shows your project tree, each deployment&#39;s history and current SHA, and per-service status with live logs — plus one-click redeploy and restart.</p></div></div></body></html>
