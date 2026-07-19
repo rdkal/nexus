@@ -174,6 +174,17 @@ class GitRepo:
         )
         return result.stdout.strip()
 
+    def tag(self, name: str):
+        """Create a lightweight tag at HEAD and push it."""
+        subprocess.run(
+            ["git", "-C", str(self.work), "tag", name],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(self.work), "push", "origin", name],
+            check=True, capture_output=True,
+        )
+
 
 @pytest.fixture
 def git_repo(tmp_path):

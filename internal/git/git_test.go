@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rdkal/nexus/internal/git"
@@ -191,5 +192,61 @@ func TestWorktreeAdd_ClearsLeftoverDir(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(worktreePath, "README")); err != nil {
 		t.Fatalf("README missing after recreating worktree: %v", err)
+	}
+}
+
+// TestResolveRef_Glob verifies wildcard tag refs pick the highest matching
+// tag, letting each app in a monorepo track only its own tag scheme.
+func TestResolveRef_Glob(t *testing.T) {
+	dir := makeUpstream(t)
+
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=T", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=T", "GIT_COMMITTER_EMAIL=t@t",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	commit := func(msg string) string {
+		run("commit", "--allow-empty", "-m", msg)
+		return run("rev-parse", "HEAD")
+	}
+
+	// Distinct commits per tag so we can assert exactly which one a glob picks.
+	webV1 := commit("web1")
+	addTag(t, dir, "web/v1.0.0")
+	webV2 := commit("web2")
+	addTag(t, dir, "web/v2.3.1")
+	commit("api1")
+	addTag(t, dir, "api/v9.0.0") // different app; must never leak into @web/*
+
+	cloneDir := filepath.Join(t.TempDir(), "bare")
+	if err := git.EnsureBareClone(cloneDir, dir); err != nil {
+		t.Fatalf("EnsureBareClone: %v", err)
+	}
+
+	cases := []struct{ ref, want string }{
+		{"@web/v*", webV2},    // highest web tag
+		{"@web/v1.*", webV1},  // pinned to the v1 line
+	}
+	for _, c := range cases {
+		got, err := git.ResolveRef(cloneDir, c.ref)
+		if err != nil {
+			t.Fatalf("ResolveRef(%s): %v", c.ref, err)
+		}
+		if got != c.want {
+			t.Errorf("ResolveRef(%s) = %s, want %s", c.ref, got, c.want)
+		}
+	}
+
+	if _, err := git.ResolveRef(cloneDir, "@nomatch-*"); err == nil {
+		t.Error("expected error for a glob matching no tags")
 	}
 }

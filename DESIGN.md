@@ -325,6 +325,7 @@ and is polled and deployed independently.
 | `@main` | Track the tip of branch `main`. Redeploys on every new commit |
 | `@v15` | Pin to tag `v15`. Redeploys only if the tag is moved (rare) |
 | `@latest` | Track the highest semver tag. Uses `git ls-remote --tags --sort=-version:refname`, takes the top result |
+| `@<glob>` | Track the highest semver tag matching a glob, e.g. `@web-v*` or `@web/v2.*`. A ref containing `*` matches `refs/tags/<glob>` only (never a branch). Lets one app in a monorepo track just its own tags, in whatever naming scheme it uses — nexus imposes no tag convention |
 
 **Inline project** — no `src:`. Defined directly in the parent `nexus.yaml`, shares the
 parent's worktree, and is deployed as part of the parent. Supports the same fields as a
@@ -387,6 +388,9 @@ git ls-remote origin refs/tags/v15
 
 # @latest — all tags sorted by version, take the highest
 git ls-remote --tags --sort=-version:refname origin 'refs/tags/*'
+
+# @<glob> — tags matching the glob, sorted by version, take the highest
+git ls-remote --tags --sort=-version:refname origin 'refs/tags/web-v*'
 ```
 
 When the resolved SHA differs from the last recorded SHA, a new deployment is enqueued.
