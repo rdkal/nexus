@@ -1,4 +1,17 @@
-build: pip install -r requirements.txt
+# Build with uv — a single static binary that needs no system Python or pip.
+# If uv isn't already on the host, install it via Astral's official installer
+# (it picks its own location; ~/.local/bin by default, which we put on PATH so
+# the freshly-installed uv is found). uv provisions a Python if the host has
+# none, so this deploys on a box with only git and curl — nexus's stated bar.
+build: |
+  set -e
+  export PATH="$HOME/.local/bin:$PATH"
+  command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
+  uv venv
+  uv pip install -r requirements.txt
+
 services:
   web:
-    run: python -m nexus_web --socket $NEXUS_HOME/nexus.sock --port 7777
+    # Run straight from the venv uv built — no uv, pip, or system Python needed
+    # at runtime, and no `python` vs `python3` ambiguity.
+    run: exec .venv/bin/python -m nexus_web --socket $NEXUS_HOME/nexus.sock --port 7777
