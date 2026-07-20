@@ -32,7 +32,7 @@ pre.code {
 """
 
 INSTALL = """\
-curl https://github.com/rdkal/nexus/raw/main/install.sh | sh
+curl -fsSL https://github.com/rdkal/nexus/raw/main/install.sh | sh
 """
 
 NEXUS_YAML = """\

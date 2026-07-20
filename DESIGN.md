@@ -34,7 +34,7 @@ Inline nested projects share the parent's worktree and are deployed together wit
 ## Installation
 
 ```sh
-curl https://github.com/rdkal/nexus/raw/main/install.sh | sh
+curl -fsSL https://github.com/rdkal/nexus/raw/main/install.sh | sh
 ```
 
 The installer sets up nexus itself and starts it — it registers no projects. Add projects
