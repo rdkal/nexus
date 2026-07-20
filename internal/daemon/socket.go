@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/rdkal/nexus/internal/config"
+	"github.com/rdkal/nexus/internal/home"
 )
 
 // newMux builds the HTTP request multiplexer for the daemon API.
@@ -116,6 +117,9 @@ func (d *Daemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // serve removes any stale socket, listens on the Unix socket path,
 // and serves the HTTP API until ctx is cancelled.
 func (d *Daemon) serve(ctx context.Context) error {
+	if err := home.CheckSocketPath(d.Paths.Socket); err != nil {
+		return err
+	}
 	_ = os.Remove(d.Paths.Socket)
 	ln, err := net.Listen("unix", d.Paths.Socket)
 	if err != nil {

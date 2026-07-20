@@ -15,6 +15,8 @@
 | Install registers no projects — `nexus project add` is a separate step afterwards | ✅ | ✅ | ✅ |
 | Installer adds `$NEXUS_HOME/bin` to `PATH` (idempotent `~/.profile`/`~/.bashrc`/`~/.zshrc`) | ✅ | ✅ | |
 | `project add`/`remove` reconcile the running daemon live (`POST /projects`) — no restart | ✅ | ✅ | ✅ |
+| `nexus version` / `--version` — release tag injected at build time (`-X main.version`), VCS-info fallback | ✅ | ✅ | ✅ |
+| Clear error when `NEXUS_HOME` makes a socket path exceed the OS Unix-socket limit (not a bare `invalid argument`) | ✅ | ✅ | ✅ |
 | **Configuration** |
 | `nexus.yaml` parser (external projects, inline projects, recursive `projects:`) | ✅ | ✅ | ✅ |
 | Project name inference from spec path (final segment default) | ✅ | ✅ | ✅ |

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -19,6 +20,44 @@ import (
 	"github.com/rdkal/nexus/internal/spec"
 	"github.com/rdkal/nexus/internal/supervisor"
 )
+
+// version is the release version, injected at build time via
+// -ldflags "-X main.version=vX.Y.Z". Empty in local/dev builds, where
+// resolveVersion falls back to the Go build info.
+var version = ""
+
+// resolveVersion returns the best available version string: the injected release
+// tag, else the module version or VCS revision from the build info, else "dev".
+func resolveVersion() string {
+	if version != "" {
+		return version
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		if v := bi.Main.Version; v != "" && v != "(devel)" {
+			return v
+		}
+		var rev string
+		var dirty bool
+		for _, s := range bi.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				rev = s.Value
+			case "vcs.modified":
+				dirty = s.Value == "true"
+			}
+		}
+		if rev != "" {
+			if len(rev) > 12 {
+				rev = rev[:12]
+			}
+			if dirty {
+				rev += "-dirty"
+			}
+			return rev
+		}
+	}
+	return "dev"
+}
 
 // notifyDaemon asks a running daemon to reconcile projects from the DB (start
 // newly-added, stop removed) over its Unix socket. Best-effort: if the daemon is
@@ -55,14 +94,28 @@ func rootCmd() *cobra.Command {
 	var homeFlag string
 
 	root := &cobra.Command{
-		Use:   "nexus",
-		Short: "Git-native process manager",
+		Use:     "nexus",
+		Short:   "Git-native process manager",
+		Version: resolveVersion(),
 	}
+	root.SetVersionTemplate("nexus {{.Version}}\n")
 	root.PersistentFlags().StringVar(&homeFlag, "home", "", "override NEXUS_HOME")
 
 	root.AddCommand(daemonCmd(&homeFlag))
 	root.AddCommand(projectCmd(&homeFlag))
+	root.AddCommand(versionCmd())
 	return root
+}
+
+func versionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print the nexus version",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println(resolveVersion())
+		},
+	}
 }
 
 func daemonCmd(homeFlag *string) *cobra.Command {

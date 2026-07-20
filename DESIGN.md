@@ -87,7 +87,14 @@ All nexus runtime state lives under a single configurable directory.
 | 3 | `~/.nexus` (default) |
 
 Using a custom `NEXUS_HOME` lets you run multiple isolated nexus instances on one machine
-or relocate state to a larger disk.
+or relocate state to a larger disk. It must be short enough that the daemon sockets under it
+(`nexus.sock`, `nexus-pm.sock`) stay within the OS limit for Unix-domain socket paths
+(~104–108 bytes); nexus checks this at startup and fails with a clear message rather than the
+kernel's opaque `invalid argument` if a chosen `NEXUS_HOME` is too deep. The default `~/.nexus`
+is always well within bounds.
+
+Run `nexus version` (or `nexus --version`) to print the installed release — useful for
+confirming an install or self-update landed the version you expected.
 
 ---
 

@@ -42,6 +42,26 @@ type Paths struct {
 	PMSocket string // nexus-pm process manager API socket (nexus-pm.sock)
 }
 
+// MaxSocketPath is the largest Unix-domain socket path length that binds
+// reliably across platforms. The kernel copies the path into
+// sockaddr_un.sun_path — 108 bytes on Linux, 104 on macOS/BSD, including the
+// trailing NUL — so we use the smaller platform's usable length. Beyond it,
+// bind(2) fails with a bare "invalid argument".
+const MaxSocketPath = 103
+
+// CheckSocketPath returns an actionable error if path is too long to bind as a
+// Unix-domain socket. Callers should check before net.Listen so an over-long
+// NEXUS_HOME is explained rather than surfacing the kernel's "invalid argument".
+func CheckSocketPath(path string) error {
+	if len(path) > MaxSocketPath {
+		return fmt.Errorf(
+			"socket path %q is %d bytes, over the %d-byte limit the OS allows for Unix sockets; "+
+				"set a shorter NEXUS_HOME (the default ~/.nexus is short enough)",
+			path, len(path), MaxSocketPath)
+	}
+	return nil
+}
+
 // NewPaths constructs Paths rooted at the given NEXUS_HOME directory.
 func NewPaths(home string) Paths {
 	return Paths{

@@ -65,6 +65,9 @@ type pmServer struct {
 }
 
 func (s *pmServer) serve(ctx context.Context, paths home.Paths) error {
+	if err := home.CheckSocketPath(paths.PMSocket); err != nil {
+		return err
+	}
 	_ = os.Remove(paths.PMSocket)
 	ln, err := net.Listen("unix", paths.PMSocket)
 	if err != nil {
