@@ -12,8 +12,11 @@ HTTP interface. HTTP only, no auth — intended for a private network.
 nexus project add github.com/rdkal/nexus-web --ref @latest
 ```
 
-Its `nexus.yaml` builds with `pip install -r requirements.txt` and runs
-`python -m nexus_web`.
+Its `nexus.yaml` builds with [uv](https://docs.astral.sh/uv/) — a single static
+binary that needs no system Python or pip. If uv isn't already on the host, the
+build step installs it (Astral's one-line installer) and lets it provision a
+Python, so the dashboard deploys on a box with only `git` and `curl`. It then
+runs straight from the venv uv built (`.venv/bin/python -m nexus_web`).
 
 > This lives under `web/` inside the nexus repo for development; it is
 > self-contained and can be lifted into its own repo unchanged.
