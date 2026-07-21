@@ -24,11 +24,12 @@ jobs:
           set -eu
           mkdir -p dist
           # Pure-Go SQLite (modernc) means CGO_ENABLED=0 cross-compiles cleanly.
+          ver="${{ github.ref_name }}"
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             os="${target%/*}"; arch="${target#*/}"
             echo "building $os/$arch"
             CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
-              go build -trimpath -ldflags "-s -w" -o "dist/nexus-$os-$arch" ./cmd/nexus
+              go build -trimpath -ldflags "-s -w -X main.version=$ver" -o "dist/nexus-$os-$arch" ./cmd/nexus
             CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
               go build -trimpath -ldflags "-s -w" -o "dist/nexus-pm-$os-$arch" ./cmd/nexus-pm
           done
