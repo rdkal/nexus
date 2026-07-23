@@ -37,6 +37,12 @@ type Input struct {
 	// Values may reference other variables as ${VAR} or $VAR ($$ is a literal $).
 	ProjectEnv map[string]string
 	ServiceEnv map[string]string
+
+	// ParentEnv is the environment: a parent set on this project's entry in its
+	// projects: map (the composer configuring a nested sub-project). It overrides
+	// the project's own ProjectEnv/ServiceEnv, but not the operator .env. Empty
+	// for a root project.
+	ParentEnv map[string]string
 }
 
 // passthrough is the allowlist of daemon environment variables a project's
@@ -92,7 +98,7 @@ func Build(in Input) ([]string, error) {
 	// A reference resolves if the name is defined anywhere below (including the
 	// full daemon env, for opt-in forwarding, and the declared keys themselves).
 	defined := make(map[string]string)
-	for _, m := range []map[string]string{host, nx, repoEnv, homeEnv, in.ProjectEnv, in.ServiceEnv} {
+	for _, m := range []map[string]string{host, nx, repoEnv, homeEnv, in.ProjectEnv, in.ServiceEnv, in.ParentEnv} {
 		for k := range m {
 			defined[k] = ""
 		}
@@ -106,6 +112,8 @@ func Build(in Input) ([]string, error) {
 	proj := interpolateAll(in.ProjectEnv, lookup, defined, missing)
 	lookup = merge(lookup, proj)
 	svc := interpolateAll(in.ServiceEnv, lookup, defined, missing)
+	lookup = merge(lookup, svc)
+	parent := interpolateAll(in.ParentEnv, lookup, defined, missing)
 
 	if len(missing) > 0 {
 		return nil, fmt.Errorf(
@@ -114,8 +122,8 @@ func Build(in Input) ([]string, error) {
 	}
 
 	// Final precedence, last wins: essentials < repo .env < project < service <
-	// operator .env < NEXUS_*.
-	final := merge(base, repoEnv, proj, svc, homeEnv, nx)
+	// parent (composer) < operator .env < NEXUS_*.
+	final := merge(base, repoEnv, proj, svc, parent, homeEnv, nx)
 	return sortedEnv(final), nil
 }
 

@@ -393,6 +393,20 @@ Two `.env` files are loaded automatically: one next to the `nexus.yaml` (committ
 and `$NEXUS_HOME/env/<project>.env` — the operator's file, **not** in git and persistent
 across deploys. Put host-specific config and secrets there; it overrides the repo's values.
 
+`environment:` can also be set on a `projects:` entry — the composer configuring a nested
+sub-project. It works for **inline and external** sub-projects and overrides that child's own
+committed `environment:`, so a parent can supply a child's config/secret or remap a
+cross-project volume variable to whatever name the child reads:
+
+```yaml
+projects:
+  traefik:  { src: github.com/org/infra/traefik }
+  authelia:
+    src: github.com/org/infra/authelia
+    environment:
+      TRAEFIK_DYNAMIC_DIR: ${NEXUS_RETU_TRAEFIK_DYNAMIC}   # remap for the nested address
+```
+
 ```yaml
 environment:          # map form (or a "- KEY=value" list)
   LOG_LEVEL: info
@@ -411,7 +425,8 @@ To hand a project a specific daemon variable, forward it by name: `TOKEN: ${CF_D
 (or the bare list form `- CF_DNS_API_TOKEN`).
 
 Precedence, low to high: essentials → repo `.env` → project `environment` → service
-`environment` → `$NEXUS_HOME/env/<project>.env` → `NEXUS_*` (which stay authoritative).
+`environment` → parent `projects:` `environment` → `$NEXUS_HOME/env/<project>.env` →
+`NEXUS_*` (which stay authoritative).
 
 ---
 

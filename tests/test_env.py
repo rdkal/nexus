@@ -163,6 +163,46 @@ def test_operator_env_file_in_nexus_home(nexus, git_repo):
     assert "TOKEN=operator-secret" in log, log
 
 
+def test_parent_environment_reaches_external_subproject(nexus, tmp_path):
+    # A reusable external sub-project with its own committed default...
+    child = GitRepo(tmp_path / "child")
+    child.commit(
+        {
+            "nexus.yaml": (
+                "environment:\n"
+                "  ACME_EMAIL: child-default@example.com\n"
+                "services:\n"
+                "  edge:\n"
+                "    run: sh -c 'echo ACME=$ACME_EMAIL; exec sleep 3600'\n"
+            )
+        }
+    )
+
+    # ...composed by a root project that overrides its environment: at the
+    # projects: entry (the composer configuring the nested project).
+    root = GitRepo(tmp_path / "system")
+    root.commit(
+        {
+            "nexus.yaml": (
+                "projects:\n"
+                "  edge:\n"
+                f"    src: {child.spec_path}\n"
+                '    ref: "@main"\n'
+                "    environment:\n"
+                "      ACME_EMAIL: ops@example.com\n"
+            )
+        }
+    )
+
+    nexus.add_project(root.spec_path, "system")
+    nexus.start(poll_interval="2s")
+    nexus.wait_for_socket()
+    nexus.wait_for_list_entry("system/edge", healthy=True, timeout=60)
+
+    log = _wait_log(nexus.client, "system/edge", "edge", "ACME=")
+    assert "ACME=ops@example.com" in log, log  # parent override wins over child default
+
+
 TRAEFIK_YAML = """\
 volumes:
   dynamic: {}

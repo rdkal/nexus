@@ -85,12 +85,17 @@ type SubProject struct {
 	Src string `yaml:"src"`
 	Ref string `yaml:"ref"`
 
-	// Inline fields — ignored for external projects (they come from the remote nexus.yaml).
-	Build       string                `yaml:"build"`
-	Environment Env                   `yaml:"environment"`
-	Volumes     map[string]struct{}   `yaml:"volumes"`
-	Services    map[string]Service    `yaml:"services"`
-	Projects    map[string]SubProject `yaml:"projects"`
+	// Build/Volumes/Services/Projects are the inline definition — ignored for
+	// external projects, whose definition comes from the remote nexus.yaml.
+	Build    string                `yaml:"build"`
+	Volumes  map[string]struct{}   `yaml:"volumes"`
+	Services map[string]Service    `yaml:"services"`
+	Projects map[string]SubProject `yaml:"projects"`
+
+	// Environment applies in BOTH cases: for an inline project it is that unit's
+	// environment:, and for an external project it is the composer's override,
+	// injected into the child's build and services.
+	Environment Env `yaml:"environment"`
 }
 
 // IsExternal reports whether this sub-project references an external git repo.
@@ -163,6 +168,11 @@ type ExternalRef struct {
 	RelPath []string
 	Src     string
 	Ref     string
+	// Environment is the environment: set on this entry in the parent's projects:
+	// map — the composer configuring/overriding the reusable sub-project. It is
+	// injected into the child's build and services (see penv), overriding the
+	// child's own committed environment:.
+	Environment map[string]string
 }
 
 // Flatten walks the inline subtree of a project file. It returns the inline units
@@ -191,7 +201,7 @@ func flattenProjects(projects map[string]SubProject, prefix []string, units *[]I
 	for alias, sub := range projects {
 		rel := append(append([]string{}, prefix...), alias)
 		if sub.IsExternal() {
-			*external = append(*external, ExternalRef{RelPath: rel, Src: sub.Src, Ref: sub.Ref})
+			*external = append(*external, ExternalRef{RelPath: rel, Src: sub.Src, Ref: sub.Ref, Environment: sub.Environment})
 			continue
 		}
 		*units = append(*units, InlineUnit{

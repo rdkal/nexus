@@ -74,6 +74,7 @@ type projectState struct {
 	aliases      []string // alias chain from root; nil for root projects
 	subdir       string   // in-repo path to this app's nexus.yaml ("" = repo root)
 	recoverSHA   string   // SHA to recover on startup ("" = never deployed)
+	parentEnv    map[string]string // environment: the parent set on this sub-project's entry (nil for roots)
 
 	queue  *poller.Queue
 	cancel context.CancelFunc
@@ -225,7 +226,7 @@ func (d *Daemon) recoverProject(ctx context.Context, ps *projectState) {
 
 	// Recover every service, including those of inline sub-projects, by re-spawning
 	// from the flattened config. Spawn is a no-op for services nexus-pm still runs.
-	specs := d.flattenedSpecs(ps.address, ps.ref, sha, appDir, cfg)
+	specs := d.flattenedSpecs(ps.address, ps.ref, sha, appDir, cfg, ps.parentEnv)
 	for relName, spec := range specs {
 		d.Sup.Spawn(serviceKey(ps.address, relName), spec)
 	}
@@ -290,6 +291,7 @@ func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 			Aliases:         ps.aliases,
 			Subdir:          ps.subdir,
 			GlobalVolumeEnv: d.globalVolumeEnv(),
+			ParentEnv:       ps.parentEnv,
 			NewSHA:          sha,
 			PrevSHA:         prevSHA,
 			PrevConfig:      prevCfg,
@@ -310,7 +312,7 @@ func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 			cfg = &config.ProjectFile{}
 		}
 
-		specs := d.flattenedSpecs(ps.address, ps.ref, sha, appDir, cfg)
+		specs := d.flattenedSpecs(ps.address, ps.ref, sha, appDir, cfg, ps.parentEnv)
 
 		ps.mu.Lock()
 		ps.sha = sha
@@ -412,6 +414,7 @@ func (d *Daemon) startChild(ctx context.Context, parent *projectState, ext confi
 		aliases:      aliases,
 		subdir:       subdir,
 		recoverSHA:   sha,
+		parentEnv:    ext.Environment,
 		queue:        &poller.Queue{},
 		svcSpecs:     make(map[string]supervisor.ServiceSpec),
 	}
@@ -485,7 +488,7 @@ func (d *Daemon) restartRuntime(project string) {
 // flattenedSpecs builds the service specs for a project and its inline sub-projects,
 // keyed by each service's address relative to the project (e.g. "api" or
 // "metrics/exporter"). The full supervisor key is serviceKey(address, relName).
-func (d *Daemon) flattenedSpecs(address, ref, sha, appDir string, cfg *config.ProjectFile) map[string]supervisor.ServiceSpec {
+func (d *Daemon) flattenedSpecs(address, ref, sha, appDir string, cfg *config.ProjectFile, parentEnv map[string]string) map[string]supervisor.ServiceSpec {
 	units, _ := cfg.Flatten()
 	globalVols := d.globalVolumeEnv()
 	specs := make(map[string]supervisor.ServiceSpec)
@@ -508,6 +511,7 @@ func (d *Daemon) flattenedSpecs(address, ref, sha, appDir string, cfg *config.Pr
 				GlobalVolumes: globalVols,
 				ProjectEnv:    u.Environment,
 				ServiceEnv:    svc.Environment,
+				ParentEnv:     parentEnv,
 			})
 			if err != nil {
 				slog.Warn("daemon: skipping service with unresolved environment", "service", key, "err", err)
