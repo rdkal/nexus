@@ -23,6 +23,7 @@
 | Operator `.env` at `$NEXUS_HOME/env/<project>.env` — host-specific config/secrets outside git, overrides repo values | ✅ | ✅ | ✅ |
 | Undefined `${VAR}` reference fails the deploy (before stopping old services) instead of expanding to empty | ✅ | ✅ | ✅ |
 | `${VAR:-default}` / `${VAR-default}` opt-out — supply a fallback instead of erroring | ✅ | ✅ | ✅ |
+| `environment:` on a `projects:` entry (composer override) honored for external sub-projects, not just inline | ✅ | ✅ | ✅ |
 | **Configuration** |
 | `nexus.yaml` parser (external projects, inline projects, recursive `projects:`) | ✅ | ✅ | ✅ |
 | Project name inference from spec path (final segment default) | ✅ | ✅ | ✅ |

@@ -125,6 +125,31 @@ func TestOperatorEnvFileOverridesRepoAndService(t *testing.T) {
 	}
 }
 
+func TestParentEnvOverridesProjectAndService(t *testing.T) {
+	env := mustBuild(t, Input{
+		Paths:         home.NewPaths(t.TempDir()),
+		Address:       "retu/authelia",
+		WorkDir:       "/wt",
+		GlobalVolumes: map[string]string{"NEXUS_RETU_TRAEFIK_DYNAMIC": "/vol/retu/traefik/dynamic"},
+		ProjectEnv:    map[string]string{"ACME_EMAIL": "child-default@example.com"},
+		ServiceEnv:    map[string]string{"PORT": "9091"},
+		// Composer overrides the child's own committed values and remaps a volume var.
+		ParentEnv: map[string]string{
+			"ACME_EMAIL":          "ops@example.com",
+			"TRAEFIK_DYNAMIC_DIR": "${NEXUS_RETU_TRAEFIK_DYNAMIC}",
+		},
+	})
+	if v, _ := find(env, "ACME_EMAIL"); v != "ops@example.com" {
+		t.Errorf("parent should override child ACME_EMAIL, got %q", v)
+	}
+	if v, _ := find(env, "TRAEFIK_DYNAMIC_DIR"); v != "/vol/retu/traefik/dynamic" {
+		t.Errorf("parent remap TRAEFIK_DYNAMIC_DIR = %q", v)
+	}
+	if v, _ := find(env, "PORT"); v != "9091" { // untouched service var stays
+		t.Errorf("PORT = %q", v)
+	}
+}
+
 func TestNexusContractNotOverridable(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("NEXUS_PROJECT=hacked\n"), 0o600); err != nil {

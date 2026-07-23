@@ -74,6 +74,11 @@ type Request struct {
 	// another project's volume by variable. Computed by the daemon per deploy.
 	GlobalVolumeEnv map[string]string
 
+	// ParentEnv is the environment: a parent set on this project's entry in its
+	// projects: map (nil for a root project). Injected into build and services,
+	// overriding the project's own environment:.
+	ParentEnv map[string]string
+
 	// Deployment SHAs
 	NewSHA  string
 	PrevSHA string // empty on first deployment
@@ -383,6 +388,7 @@ func (d *Deployer) env(uAddr, sha, workDir string, req Request, projEnv, svcEnv 
 		GlobalVolumes: req.GlobalVolumeEnv,
 		ProjectEnv:    projEnv,
 		ServiceEnv:    svcEnv,
+		ParentEnv:     req.ParentEnv,
 	})
 }
 
