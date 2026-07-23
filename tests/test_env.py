@@ -95,6 +95,32 @@ def test_daemon_secret_not_leaked_but_forwardable(nexus, git_repo):
     assert "FWD=[s3cr3t]" in log, log
 
 
+UNDEFINED_ENV_YAML = """\
+services:
+  api:
+    environment:
+      URL: https://${DOES_NOT_EXIST}/x
+    run: sh -c 'echo up; exec sleep 3600'
+"""
+
+
+def test_undefined_env_variable_fails_deploy(nexus, git_repo):
+    # Referencing a variable that is defined nowhere is a hard error, not a
+    # silent empty expansion — so the deploy fails and the project stays down.
+    import pytest
+
+    git_repo.commit({"nexus.yaml": UNDEFINED_ENV_YAML})
+    nexus.add_project(git_repo.spec_path, "app")
+    nexus.start(poll_interval="2s")
+    nexus.wait_for_socket()
+
+    with pytest.raises(TimeoutError):
+        nexus.wait_for_sha("app", timeout=15)
+
+    svcs = nexus.client.list_services("app") or []
+    assert not any(s.get("running") for s in svcs), svcs
+
+
 def test_operator_env_file_in_nexus_home(nexus, git_repo):
     # Secrets/host config the operator sets WITHOUT touching the repo, at
     # $NEXUS_HOME/env/<project>.env.

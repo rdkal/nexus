@@ -84,6 +84,13 @@ type Request struct {
 	PrevConfig *config.ProjectFile
 }
 
+// plannedService is a service whose environment has been resolved and is ready
+// to spawn once old services are stopped.
+type plannedService struct {
+	key  string
+	spec supervisor.ServiceSpec
+}
+
 // Deploy runs the full deployment lifecycle:
 //
 //	FETCH → CHECKOUT → BUILD → SHUTDOWN → STARTUP → VERIFY → PROMOTE → CLEANUP
@@ -180,37 +187,53 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 		return fmt.Errorf("record deployment: %w", err)
 	}
 
-	// BUILD each unit that declares one (skipped when no build: field). All builds
-	// run in the shared worktree, in deterministic (sorted) unit order.
+	failDeploy := func(format string, args ...any) error {
+		removeNewWorktree()
+		_ = d.DB.FinishDeployment(depID, "failed", time.Now())
+		return fmt.Errorf(format, args...)
+	}
+
+	// BUILD each unit that declares one, and compute every service's environment
+	// up front. Both resolve environment: references, so an undefined variable
+	// fails the deploy here — before any old service is stopped. Builds run in the
+	// shared worktree in deterministic (sorted) unit order.
+	var toSpawn []plannedService
 	for _, u := range newUnits {
-		if u.Build == "" {
-			continue
-		}
 		uAddr := unitAddress(req.Address, u.RelPath)
-		env := d.env(uAddr, req.NewSHA, newDir, req, u.Environment, nil, u.Volumes)
-		buildLog := d.Paths.BuildLog(uAddr, req.NewSHA)
-		if err := runBuild(u.Build, newDir, env, buildLog); err != nil {
-			removeNewWorktree()
-			_ = d.DB.FinishDeployment(depID, "failed", time.Now())
-			return fmt.Errorf("build %s: %w", uAddr, err)
+		buildEnv, err := d.env(uAddr, req.NewSHA, newDir, req, u.Environment, nil, u.Volumes)
+		if err != nil {
+			return failDeploy("environment for %s: %w", uAddr, err)
+		}
+		if u.Build != "" {
+			buildLog := d.Paths.BuildLog(uAddr, req.NewSHA)
+			if err := runBuild(u.Build, newDir, buildEnv, buildLog); err != nil {
+				return failDeploy("build %s: %w", uAddr, err)
+			}
+		}
+		for name, svc := range u.Services {
+			key := serviceKey(uAddr, name)
+			svcEnv, err := d.env(uAddr, req.NewSHA, newDir, req, u.Environment, svc.Environment, u.Volumes)
+			if err != nil {
+				return failDeploy("environment for %s: %w", key, err)
+			}
+			toSpawn = append(toSpawn, plannedService{
+				key: key,
+				spec: supervisor.ServiceSpec{
+					Command: svc.Run,
+					WorkDir: newDir,
+					Env:     svcEnv,
+					LogFile: d.Paths.ServiceLog(key),
+				},
+			})
 		}
 	}
 
 	// SHUTDOWN: stop all services of the current deployment (across all units) in parallel.
 	d.stopUnits(req.Address, prevUnits)
 
-	// STARTUP: spawn services for every unit from the new worktree.
-	for _, u := range newUnits {
-		uAddr := unitAddress(req.Address, u.RelPath)
-		for name, svc := range u.Services {
-			key := serviceKey(uAddr, name)
-			d.Sup.Spawn(key, supervisor.ServiceSpec{
-				Command: svc.Run,
-				WorkDir: newDir,
-				Env:     d.env(uAddr, req.NewSHA, newDir, req, u.Environment, svc.Environment, u.Volumes),
-				LogFile: d.Paths.ServiceLog(key),
-			})
-		}
+	// STARTUP: spawn the services planned above from the new worktree.
+	for _, ps := range toSpawn {
+		d.Sup.Spawn(ps.key, ps.spec)
 	}
 
 	// VERIFY: observe services for VerifyWindow; any crash triggers rollback.
@@ -259,10 +282,15 @@ func (d *Deployer) rollback(
 			uAddr := unitAddress(req.Address, u.RelPath)
 			for name, svc := range u.Services {
 				key := serviceKey(uAddr, name)
+				env, err := d.env(uAddr, req.PrevSHA, prevDir, req, u.Environment, svc.Environment, u.Volumes)
+				if err != nil {
+					slog.Error("rollback: env build failed", "service", key, "err", err)
+					continue
+				}
 				d.Sup.Spawn(key, supervisor.ServiceSpec{
 					Command: svc.Run,
 					WorkDir: prevDir,
-					Env:     d.env(uAddr, req.PrevSHA, prevDir, req, u.Environment, svc.Environment, u.Volumes),
+					Env:     env,
 					LogFile: d.Paths.ServiceLog(key),
 				})
 			}
@@ -344,7 +372,7 @@ func (d *Deployer) verify(units []config.InlineUnit, base string) error {
 // the penv package: the host environment, NEXUS_* contract variables, the unit's
 // own and every project's volume paths, the app's .env, and the project- and
 // service-level environment: maps (svcEnv is nil for the build step).
-func (d *Deployer) env(uAddr, sha, workDir string, req Request, projEnv, svcEnv map[string]string, ownVols map[string]struct{}) []string {
+func (d *Deployer) env(uAddr, sha, workDir string, req Request, projEnv, svcEnv map[string]string, ownVols map[string]struct{}) ([]string, error) {
 	return penv.Build(penv.Input{
 		Paths:         d.Paths,
 		Address:       uAddr,

@@ -7,6 +7,7 @@ package penv
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -50,8 +51,11 @@ var passthrough = []string{
 	"TERM", "TZ", "TMPDIR",
 }
 
-// Build assembles the final environment slice (KEY=VALUE entries, sorted).
-func Build(in Input) []string {
+// Build assembles the final environment slice (KEY=VALUE entries, sorted). It
+// returns an error if an environment: value references a variable that is not
+// defined anywhere — a typo, or a secret the operator forgot to set — rather than
+// silently expanding it to empty.
+func Build(in Input) ([]string, error) {
 	host := envMap(os.Environ())
 
 	// Layer 1: only the allowlisted essentials from the daemon environment.
@@ -85,18 +89,34 @@ func Build(in Input) []string {
 	repoEnv := readDotenv(filepath.Join(in.WorkDir, ".env"))
 	homeEnv := readDotenv(in.Paths.EnvFile(in.Address))
 
+	// A reference resolves if the name is defined anywhere below (including the
+	// full daemon env, for opt-in forwarding, and the declared keys themselves).
+	defined := make(map[string]string)
+	for _, m := range []map[string]string{host, nx, repoEnv, homeEnv, in.ProjectEnv, in.ServiceEnv} {
+		for k := range m {
+			defined[k] = ""
+		}
+	}
+
 	// Interpolation may reference any daemon variable by name (opt-in forwarding),
 	// plus everything nexus provides and both .env files — but the full host
 	// environment is only a *lookup* source, never copied into the result.
+	missing := make(map[string]string)
 	lookup := merge(host, nx, repoEnv, homeEnv)
-	proj := interpolateAll(in.ProjectEnv, lookup)
+	proj := interpolateAll(in.ProjectEnv, lookup, defined, missing)
 	lookup = merge(lookup, proj)
-	svc := interpolateAll(in.ServiceEnv, lookup)
+	svc := interpolateAll(in.ServiceEnv, lookup, defined, missing)
+
+	if len(missing) > 0 {
+		return nil, fmt.Errorf(
+			"environment references undefined variable(s): %s — define them in environment:, the repo .env, or %s",
+			strings.Join(sortedKeys(missing), ", "), in.Paths.EnvFile(in.Address))
+	}
 
 	// Final precedence, last wins: essentials < repo .env < project < service <
 	// operator .env < NEXUS_*.
 	final := merge(base, repoEnv, proj, svc, homeEnv, nx)
-	return sortedEnv(final)
+	return sortedEnv(final), nil
 }
 
 // VolumeVar returns the global environment variable name for a project's volume,
@@ -143,22 +163,29 @@ func sortedEnv(m map[string]string) []string {
 	return out
 }
 
-func interpolateAll(in map[string]string, lookup map[string]string) map[string]string {
+func interpolateAll(in, lookup, defined, missing map[string]string) map[string]string {
 	if len(in) == 0 {
 		return nil
 	}
 	out := make(map[string]string, len(in))
 	for k, v := range in {
-		out[k] = interpolate(v, lookup)
+		out[k] = interpolate(v, lookup, defined, missing)
 	}
 	return out
 }
 
 // interpolate expands ${VAR} and $VAR references from lookup. $$ is a literal $.
-// Unknown variables expand to empty, matching docker compose.
-func interpolate(s string, lookup map[string]string) string {
+// Any referenced name absent from defined is recorded in missing (a name that is
+// defined but empty is fine); the caller turns a non-empty missing set into an error.
+func interpolate(s string, lookup, defined, missing map[string]string) string {
 	if !strings.ContainsRune(s, '$') {
 		return s
+	}
+	resolve := func(name string) string {
+		if _, ok := defined[name]; !ok {
+			missing[name] = ""
+		}
+		return lookup[name]
 	}
 	var b strings.Builder
 	i := 0
@@ -175,7 +202,7 @@ func interpolate(s string, lookup map[string]string) string {
 		}
 		if i+1 < len(s) && s[i+1] == '{' { // ${NAME}
 			if end := strings.IndexByte(s[i+2:], '}'); end >= 0 {
-				b.WriteString(lookup[s[i+2:i+2+end]])
+				b.WriteString(resolve(s[i+2 : i+2+end]))
 				i = i + 2 + end + 1
 				continue
 			}
@@ -186,7 +213,7 @@ func interpolate(s string, lookup map[string]string) string {
 			j++
 		}
 		if j > i+1 {
-			b.WriteString(lookup[s[i+1:j]])
+			b.WriteString(resolve(s[i+1 : j]))
 			i = j
 			continue
 		}
@@ -194,6 +221,15 @@ func interpolate(s string, lookup map[string]string) string {
 		i++
 	}
 	return b.String()
+}
+
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func isNameChar(b byte) bool {

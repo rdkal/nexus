@@ -498,20 +498,25 @@ func (d *Daemon) flattenedSpecs(address, ref, sha, appDir string, cfg *config.Pr
 				relName = relPrefix + "/" + name
 			}
 			key := serviceKey(address, relName)
+			env, err := penv.Build(penv.Input{
+				Paths:         d.Paths,
+				Address:       uAddr,
+				Ref:           ref,
+				SHA:           sha,
+				WorkDir:       appDir,
+				OwnVolumes:    u.Volumes,
+				GlobalVolumes: globalVols,
+				ProjectEnv:    u.Environment,
+				ServiceEnv:    svc.Environment,
+			})
+			if err != nil {
+				slog.Warn("daemon: skipping service with unresolved environment", "service", key, "err", err)
+				continue
+			}
 			specs[relName] = supervisor.ServiceSpec{
 				Command: svc.Run,
 				WorkDir: appDir,
-				Env: penv.Build(penv.Input{
-					Paths:         d.Paths,
-					Address:       uAddr,
-					Ref:           ref,
-					SHA:           sha,
-					WorkDir:       appDir,
-					OwnVolumes:    u.Volumes,
-					GlobalVolumes: globalVols,
-					ProjectEnv:    u.Environment,
-					ServiceEnv:    svc.Environment,
-				}),
+				Env:     env,
 				LogFile: d.Paths.ServiceLog(key),
 			}
 		}

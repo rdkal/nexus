@@ -26,9 +26,18 @@ func cut(s string) (string, string, bool) {
 	return s, "", false
 }
 
+func mustBuild(t *testing.T, in Input) []string {
+	t.Helper()
+	env, err := Build(in)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return env
+}
+
 func TestBuildContractAndVolumes(t *testing.T) {
 	paths := home.NewPaths(t.TempDir())
-	env := Build(Input{
+	env := mustBuild(t, Input{
 		Paths:      paths,
 		Address:    "traefik",
 		Ref:        "main",
@@ -55,7 +64,7 @@ func TestVolumeVar(t *testing.T) {
 
 func TestGlobalVolumeAndInterpolation(t *testing.T) {
 	// Authelia references Traefik's volume by the global var, remapped to its own.
-	env := Build(Input{
+	env := mustBuild(t, Input{
 		Paths:         home.NewPaths(t.TempDir()),
 		Address:       "authelia",
 		WorkDir:       "/wt",
@@ -72,7 +81,7 @@ func TestServiceOverridesProjectOverridesDotenv(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("K=from_dotenv\nONLY_DOTENV=1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env := Build(Input{
+	env := mustBuild(t, Input{
 		Paths:      home.NewPaths(t.TempDir()),
 		Address:    "app",
 		WorkDir:    dir,
@@ -101,7 +110,7 @@ func TestOperatorEnvFileOverridesRepoAndService(t *testing.T) {
 	if err := os.WriteFile(paths.EnvFile("app"), []byte("K=from_operator\nTOKEN=abc\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env := Build(Input{
+	env := mustBuild(t, Input{
 		Paths:      paths,
 		Address:    "app",
 		WorkDir:    work,
@@ -121,7 +130,7 @@ func TestNexusContractNotOverridable(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("NEXUS_PROJECT=hacked\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env := Build(Input{
+	env := mustBuild(t, Input{
 		Paths:      home.NewPaths(t.TempDir()),
 		Address:    "app",
 		WorkDir:    dir,
@@ -142,7 +151,7 @@ func TestDaemonEnvIsNotLeaked(t *testing.T) {
 	t.Setenv("PATH", "/usr/bin:/bin")
 
 	paths := home.NewPaths(t.TempDir())
-	env := Build(Input{Paths: paths, Address: "app", WorkDir: "/wt"})
+	env := mustBuild(t, Input{Paths: paths, Address: "app", WorkDir: "/wt"})
 
 	if _, ok := find(env, "SOME_PROJECT_SECRET"); ok {
 		t.Error("daemon secret leaked into project environment")
@@ -158,7 +167,7 @@ func TestDaemonEnvIsNotLeaked(t *testing.T) {
 func TestExplicitForwardFromDaemonEnv(t *testing.T) {
 	// A project can opt in to a specific daemon variable by naming it.
 	t.Setenv("CF_DNS_API_TOKEN", "s3cr3t")
-	env := Build(Input{
+	env := mustBuild(t, Input{
 		Paths:      home.NewPaths(t.TempDir()),
 		Address:    "traefik",
 		WorkDir:    "/wt",
@@ -186,10 +195,35 @@ func TestInterpolate(t *testing.T) {
 		"no vars":     "no vars",
 	}
 	for in, want := range cases {
-		if got := interpolate(in, lookup); got != want {
+		defined := map[string]string{"A": "", "B_C": "", "MISSING": ""} // all "defined" here
+		if got := interpolate(in, lookup, defined, map[string]string{}); got != want {
 			t.Errorf("interpolate(%q) = %q, want %q", in, got, want)
 		}
 	}
+}
+
+func TestBuildErrorsOnUndefinedVariable(t *testing.T) {
+	_, err := Build(Input{
+		Paths:      home.NewPaths(t.TempDir()),
+		Address:    "app",
+		WorkDir:    "/wt",
+		ServiceEnv: map[string]string{"URL": "https://${API_HOST}/x", "OK": "literal"},
+	})
+	if err == nil {
+		t.Fatal("expected an error for an undefined variable reference")
+	}
+	if !contains(err.Error(), "API_HOST") {
+		t.Errorf("error should name the missing variable, got: %v", err)
+	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }
 
 func TestReadDotenv(t *testing.T) {
