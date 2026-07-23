@@ -77,6 +77,39 @@ WEB_UI = """\
 nexus project add github.com/rdkal/nexus/web
 """
 
+ENV_YAML = """\
+# Project-wide — applies to the build and every service.
+environment:
+  LOG_LEVEL: info
+
+services:
+  api:
+    environment:              # per-service; wins over project-wide
+      PORT: ${PORT:-8080}     # ${VAR:-default}: optional, with a fallback
+      TOKEN: ${CF_API_TOKEN}  # undefined -> deploy fails (never a silent empty)
+    run: ./api
+
+projects:
+  authelia:
+    src: github.com/org/infra/authelia
+    environment:              # the composer configuring a nested sub-project
+      TRAEFIK_DIR: ${NEXUS_RETU_TRAEFIK_DYNAMIC}   # point at another project's volume
+"""
+
+PRECEDENCE = """\
+essentials < repo .env < project env < service env
+  < parent projects: env < ~/.nexus/env/<project>.env < NEXUS_*
+"""
+
+CLI = """\
+nexus project add <spec>[:name] [--ref <ref>]   register a project, deploy it now
+nexus project list                              projects with their SHA and status
+nexus project stop <name>                       pause: stop services, stay tracked
+nexus project start <name>                      resume from the last deployed SHA
+nexus project remove <name>                     forget a project (stops it too)
+nexus version                                   print the installed version
+"""
+
 
 def code(text: str):
     return Panel[h.pre(class_="code")[text.rstrip("\n")]]
@@ -140,6 +173,69 @@ def page():
                     ".",
                 ],
                 code(REFS),
+                h.h2["Environment variables"],
+                h.p[
+                    "Set variables at three levels — project-wide (build and every service), "
+                    "per service (most specific wins), and on a ",
+                    h.code["projects:"],
+                    " entry (the composer configuring a nested sub-project). Docker-compose "
+                    "syntax: a map, or a ",
+                    h.code["- KEY=value"],
+                    " list.",
+                ],
+                code(ENV_YAML),
+                h.p[
+                    "Two ",
+                    h.code[".env"],
+                    " files load automatically: one next to the ",
+                    h.code["nexus.yaml"],
+                    " (committed defaults) and ",
+                    h.code["~/.nexus/env/<project>.env"],
+                    " (host secrets, not in git, overrides the repo). Interpolate with ",
+                    h.code["${VAR}"],
+                    "; a reference to an undefined variable fails the deploy instead of "
+                    "expanding to empty — use ",
+                    h.code["${VAR:-default}"],
+                    " for optionals.",
+                ],
+                h.p[
+                    "Every project's volumes are published to all projects as ",
+                    h.code["NEXUS_<PROJECT>_<VOLUME>"],
+                    " (e.g. ",
+                    h.code["NEXUS_TRAEFIK_DYNAMIC"],
+                    "), so one project can reference another's volume path without hardcoding "
+                    "it. Processes also get ",
+                    h.code["NEXUS_PROJECT"],
+                    ", ",
+                    h.code["NEXUS_SHA"],
+                    ", ",
+                    h.code["NEXUS_REF"],
+                    ", ",
+                    h.code["NEXUS_WORKTREE"],
+                    ", and ",
+                    h.code["NEXUS_VOLUME_<NAME>"],
+                    " for their own volumes — but nothing else from the daemon's environment, "
+                    "so one project's secrets stay invisible to another. Precedence, low to high:",
+                ],
+                code(PRECEDENCE),
+                h.h2["CLI commands"],
+                h.p[
+                    "The daemon runs as a background service; these are the commands you use. ",
+                    h.code["add"],
+                    ", ",
+                    h.code["remove"],
+                    ", ",
+                    h.code["stop"],
+                    ", and ",
+                    h.code["start"],
+                    " take effect immediately — the CLI updates the database and nudges the "
+                    "running daemon. Add ",
+                    h.code["--home"],
+                    " to target a non-default ",
+                    h.code["NEXUS_HOME"],
+                    ".",
+                ],
+                code(CLI),
             ]
         ]
     ]
