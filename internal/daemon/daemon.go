@@ -74,6 +74,7 @@ type projectState struct {
 	aliases      []string // alias chain from root; nil for root projects
 	subdir       string   // in-repo path to this app's nexus.yaml ("" = repo root)
 	recoverSHA   string   // SHA to recover on startup ("" = never deployed)
+	src          string            // raw external src (before repo-root resolution); "" for roots
 	parentEnv    map[string]string // environment: the parent set on this sub-project's entry (nil for roots)
 
 	queue  *poller.Queue
@@ -359,7 +360,8 @@ func (d *Daemon) reconcileChildren(ctx context.Context, ps *projectState, cfg *c
 		desired[strings.Join(ext.RelPath, "/")] = ext
 	}
 
-	var toStart []config.ExternalRef
+	var toStart []config.ExternalRef   // newly declared
+	var toRestart []config.ExternalRef // present but parent-owned config changed
 	var toStop []*projectState
 
 	ps.mu.Lock()
@@ -367,8 +369,18 @@ func (d *Daemon) reconcileChildren(ctx context.Context, ps *projectState, cfg *c
 		ps.children = make(map[string]*projectState)
 	}
 	for key, ext := range desired {
-		if _, ok := ps.children[key]; !ok {
+		child, ok := ps.children[key]
+		if !ok {
 			toStart = append(toStart, ext)
+			continue
+		}
+		// An alias that stays present but whose parent-supplied config (ref, src,
+		// or environment:) changed must be re-applied — its running instance was
+		// built with the old values.
+		if externalRefChanged(child, ext) {
+			toStop = append(toStop, child)
+			delete(ps.children, key)
+			toRestart = append(toRestart, ext)
 		}
 	}
 	for key, child := range ps.children {
@@ -380,16 +392,50 @@ func (d *Daemon) reconcileChildren(ctx context.Context, ps *projectState, cfg *c
 	ps.mu.Unlock()
 
 	for _, child := range toStop {
-		slog.Info("daemon: removing sub-project", "address", child.address)
+		slog.Info("daemon: stopping sub-project", "address", child.address)
 		d.stopProjectState(child)
 	}
 	for _, ext := range toStart {
 		d.startChild(ctx, ps, ext)
 	}
+	for _, ext := range toRestart {
+		slog.Info("daemon: sub-project config changed; rebuilding", "alias", strings.Join(ext.RelPath, "/"))
+		child := d.startChild(ctx, ps, ext)
+		// The ref/src are unchanged on a pure environment: change, so polling would
+		// not re-trigger a build. Force one at the current SHA so the new parent
+		// config actually takes effect (not just a service restart).
+		if child != nil && child.recoverSHA != "" {
+			child.queue.Push(child.recoverSHA)
+		}
+	}
 }
 
-// startChild builds and starts an external sub-project under parent.
-func (d *Daemon) startChild(ctx context.Context, parent *projectState, ext config.ExternalRef) {
+// externalRefChanged reports whether a running child's parent-supplied config
+// differs from a freshly-flattened ExternalRef — a changed ref, src, or
+// environment: override.
+func externalRefChanged(child *projectState, ext config.ExternalRef) bool {
+	ref := ext.Ref
+	if ref == "" {
+		ref = "main"
+	}
+	return child.ref != ref || child.src != ext.Src || !envEqual(child.parentEnv, ext.Environment)
+}
+
+func envEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if bv, ok := b[k]; !ok || bv != v {
+			return false
+		}
+	}
+	return true
+}
+
+// startChild builds and starts an external sub-project under parent, returning
+// the created projectState (nil only if the alias is empty).
+func (d *Daemon) startChild(ctx context.Context, parent *projectState, ext config.ExternalRef) *projectState {
 	ref := ext.Ref
 	if ref == "" {
 		ref = "main"
@@ -424,6 +470,7 @@ func (d *Daemon) startChild(ctx context.Context, parent *projectState, ext confi
 		aliases:      aliases,
 		subdir:       subdir,
 		recoverSHA:   sha,
+		src:          ext.Src,
 		parentEnv:    ext.Environment,
 		queue:        &poller.Queue{},
 		svcSpecs:     make(map[string]supervisor.ServiceSpec),
@@ -440,6 +487,7 @@ func (d *Daemon) startChild(ctx context.Context, parent *projectState, ext confi
 	if err := d.startProjectState(ctx, child); err != nil {
 		slog.Error("daemon: failed to start sub-project", "address", childAddr, "err", err)
 	}
+	return child
 }
 
 // stopProjectState cancels a project's loops, stops all of its services, and

@@ -24,6 +24,7 @@
 | Undefined `${VAR}` reference fails the deploy (before stopping old services) instead of expanding to empty | ✅ | ✅ | ✅ |
 | `${VAR:-default}` / `${VAR-default}` opt-out — supply a fallback instead of erroring | ✅ | ✅ | ✅ |
 | `environment:` on a `projects:` entry (composer override) honored for external sub-projects, not just inline | ✅ | ✅ | ✅ |
+| Changing a nested project's parent-supplied `environment:`/`ref`/`src` rebuilds the child (reconcileChildren diffs content, not just alias presence) | ✅ | ✅ | ✅ |
 | **Configuration** |
 | `nexus.yaml` parser (external projects, inline projects, recursive `projects:`) | ✅ | ✅ | ✅ |
 | Project name inference from spec path (final segment default) | ✅ | ✅ | ✅ |
