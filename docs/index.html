@@ -621,8 +621,8 @@ build: go build -o server ./cmd/server
 volumes:
   data: {}
 
-# Environment variables (optional) — like docker compose. A .env file
-# next to this one is loaded too.
+# Environment variables (optional), docker-compose style. A .env next to
+# this file is loaded; host secrets go in ~/.nexus/env/&lt;project&gt;.env.
 environment:
   LOG_LEVEL: info
 

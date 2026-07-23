@@ -841,8 +841,7 @@ They are slower and intended to run in CI rather than on every save.
 - Flows / pipelines
 - TLS / authentication on the web UI
 - Inbound webhooks (polling only for now)
-- Secret management
-- Cross-deployment volume path injection (see Open Questions)
+- Encrypted secret store (per-project env via `environment:` and `$NEXUS_HOME/env` exists; encryption at rest does not)
 - Multi-machine execution
 - Windows support
 
@@ -852,11 +851,7 @@ They are slower and intended to run in CI rather than on every save.
 
 1. **`depends_on` / startup ordering**: not in v1. Services crash-loop until their
    dependencies are available — the process supervisor's exponential backoff handles this.
-   Explicit ordering and `bind:` wiring can be added later without breaking existing configs.
+   Explicit ordering can be added later without breaking existing configs.
 
-2. **Cross-deployment volume paths**: a service sometimes needs the volume path of another
-   project (e.g. api needs postgres's socket path). V1 services coordinate via well-known
-   host paths or out-of-band env vars. A future `bind:` mechanism could inject these paths.
-
-3. **`@latest` tie-breaking**: non-semver tag names that sort equally under `version:refname`
+2. **`@latest` tie-breaking**: non-semver tag names that sort equally under `version:refname`
    fall back to tag creation date. Decided — no further action needed.
