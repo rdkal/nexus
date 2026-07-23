@@ -643,4 +643,25 @@ projects:
         run: ./exporter</pre></div><h3>Ref syntax</h3><p>A ref is a branch, tag, or tag glob — set it with <code>--ref</code>, or inline as <code>&lt;spec&gt;@&lt;ref&gt;</code>.</p><div class="panel"><pre class="code">main       track a branch — deploys on every push
 v1.2.3     pin an exact tag
 latest     the newest semver tag
-web-v*     newest tag matching a glob — one app in a monorepo</pre></div></div></div></body></html>
+web-v*     newest tag matching a glob — one app in a monorepo</pre></div><h2>Environment variables</h2><p>Set variables at three levels — project-wide (build and every service), per service (most specific wins), and on a <code>projects:</code> entry (the composer configuring a nested sub-project). Docker-compose syntax: a map, or a <code>- KEY=value</code> list.</p><div class="panel"><pre class="code"># Project-wide — applies to the build and every service.
+environment:
+  LOG_LEVEL: info
+
+services:
+  api:
+    environment:              # per-service; wins over project-wide
+      PORT: ${PORT:-8080}     # ${VAR:-default}: optional, with a fallback
+      TOKEN: ${CF_API_TOKEN}  # undefined -&gt; deploy fails (never a silent empty)
+    run: ./api
+
+projects:
+  authelia:
+    src: github.com/org/infra/authelia
+    environment:              # the composer configuring a nested sub-project
+      TRAEFIK_DIR: ${NEXUS_RETU_TRAEFIK_DYNAMIC}   # point at another project&#39;s volume</pre></div><p>Two <code>.env</code> files load automatically: one next to the <code>nexus.yaml</code> (committed defaults) and <code>~/.nexus/env/&lt;project&gt;.env</code> (host secrets, not in git, overrides the repo). Interpolate with <code>${VAR}</code>; a reference to an undefined variable fails the deploy instead of expanding to empty — use <code>${VAR:-default}</code> for optionals.</p><p>Every project&#39;s volumes are published to all projects as <code>NEXUS_&lt;PROJECT&gt;_&lt;VOLUME&gt;</code> (e.g. <code>NEXUS_TRAEFIK_DYNAMIC</code>), so one project can reference another&#39;s volume path without hardcoding it. Processes also get <code>NEXUS_PROJECT</code>, <code>NEXUS_SHA</code>, <code>NEXUS_REF</code>, <code>NEXUS_WORKTREE</code>, and <code>NEXUS_VOLUME_&lt;NAME&gt;</code> for their own volumes — but nothing else from the daemon&#39;s environment, so one project&#39;s secrets stay invisible to another. Precedence, low to high:</p><div class="panel"><pre class="code">essentials &lt; repo .env &lt; project env &lt; service env
+  &lt; parent projects: env &lt; ~/.nexus/env/&lt;project&gt;.env &lt; NEXUS_*</pre></div><h2>CLI commands</h2><p>The daemon runs as a background service; these are the commands you use. <code>add</code>, <code>remove</code>, <code>stop</code>, and <code>start</code> take effect immediately — the CLI updates the database and nudges the running daemon. Add <code>--home</code> to target a non-default <code>NEXUS_HOME</code>.</p><div class="panel"><pre class="code">nexus project add &lt;spec&gt;[:name] [--ref &lt;ref&gt;]   register a project, deploy it now
+nexus project list                              projects with their SHA and status
+nexus project stop &lt;name&gt;                       pause: stop services, stay tracked
+nexus project start &lt;name&gt;                      resume from the last deployed SHA
+nexus project remove &lt;name&gt;                     forget a project (stops it too)
+nexus version                                   print the installed version</pre></div></div></div></body></html>
