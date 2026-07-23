@@ -374,6 +374,33 @@ Key: service name. Unique within this deployment alongside volume names and proj
 | Field | Required | Description |
 |---|---|---|
 | `run` | yes | Shell command. Spawned with `sh -c`. Working directory is the directory containing the `nexus.yaml` (equals worktree root for single-repo projects; may be a subdirectory for monorepos) |
+| `environment` | no | Per-service environment variables (see below). Override the project-level `environment` for the same key |
+
+#### `environment` (map or list)
+
+Environment variables, accepted in either docker-compose form — a map or a `KEY=value`
+list:
+
+```yaml
+environment:            # map form
+  LOG_LEVEL: info
+  PORT: 8080
+
+environment:            # list form
+  - LOG_LEVEL=info
+  - PORT=8080
+```
+
+Declared at the top level (applies to the project's build and every service) and/or on an
+individual service (applies to that service, overriding the project-level value for the same
+key). Values may reference other variables as `${VAR}` or `$VAR` (`$$` is a literal `$`);
+unknown variables expand to empty. This is the mechanism for wiring one project to another's
+volume — e.g. `ROUTES_DIR: ${NEXUS_TRAEFIK_DYNAMIC}/authelia` (see below).
+
+A `.env` file next to the `nexus.yaml` is loaded automatically (simple `KEY=value` lines,
+`#` comments, optional quotes). Precedence, lowest to highest: inherited daemon environment
+→ `.env` → project `environment` → service `environment` → the `NEXUS_*` contract variables
+(which are authoritative and cannot be overridden).
 
 ---
 
@@ -396,8 +423,18 @@ NEXUS_PROJECT=<project name, e.g. postgres>
 NEXUS_SHA=<full-commit-sha>
 NEXUS_REF=<branch-or-tag>
 NEXUS_WORKTREE=<absolute-path-to-this-worktree>
-NEXUS_VOLUME_<NAME>=<absolute-path>    # one per declared volume; resolves to $NEXUS_HOME/volumes/<resource-address>
+NEXUS_VOLUME_<NAME>=<absolute-path>            # this project's own volumes
+NEXUS_<PROJECT>_<VOLUME>=<absolute-path>       # every project's volumes, for cross-project wiring
 ```
+
+`NEXUS_<PROJECT>_<VOLUME>` (e.g. `NEXUS_TRAEFIK_DYNAMIC`, `NEXUS_MY_SYSTEM_DB_DATA`) is
+injected for the volumes of *every* deployed project, so a dependent project can reference
+another's volume by variable instead of hardcoding a path — the composable answer to
+"project A needs project B's volume." Because names are assigned at `add`-time, the consumer
+maps it to whatever variable it actually reads via `environment:`
+(`ROUTES_DIR: ${NEXUS_TRAEFIK_DYNAMIC}/authelia`). The target project must already be
+deployed for its variable to be present; add the provider before the consumer (or redeploy
+the consumer afterward).
 
 ---
 

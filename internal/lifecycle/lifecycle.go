@@ -14,6 +14,7 @@ import (
 	"github.com/rdkal/nexus/internal/config"
 	"github.com/rdkal/nexus/internal/git"
 	"github.com/rdkal/nexus/internal/home"
+	"github.com/rdkal/nexus/internal/penv"
 	"github.com/rdkal/nexus/internal/supervisor"
 )
 
@@ -67,6 +68,11 @@ type Request struct {
 	RootSpecPath string   // spec path of the root deployment (for worktree placement)
 	Aliases      []string // alias chain from root to this project; nil for root projects
 	Subdir       string   // in-repo path to this app's nexus.yaml ("" = repo root)
+
+	// GlobalVolumeEnv maps NEXUS_<PROJECT>_<VOLUME> names to absolute paths for
+	// every project on the instance, so this project's processes can reference
+	// another project's volume by variable. Computed by the daemon per deploy.
+	GlobalVolumeEnv map[string]string
 
 	// Deployment SHAs
 	NewSHA  string
@@ -181,7 +187,7 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 			continue
 		}
 		uAddr := unitAddress(req.Address, u.RelPath)
-		env := d.unitEnv(uAddr, req.Ref, req.NewSHA, newDir, u.Volumes)
+		env := d.env(uAddr, req.NewSHA, newDir, req, u.Environment, nil, u.Volumes)
 		buildLog := d.Paths.BuildLog(uAddr, req.NewSHA)
 		if err := runBuild(u.Build, newDir, env, buildLog); err != nil {
 			removeNewWorktree()
@@ -196,13 +202,12 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 	// STARTUP: spawn services for every unit from the new worktree.
 	for _, u := range newUnits {
 		uAddr := unitAddress(req.Address, u.RelPath)
-		env := d.unitEnv(uAddr, req.Ref, req.NewSHA, newDir, u.Volumes)
 		for name, svc := range u.Services {
 			key := serviceKey(uAddr, name)
 			d.Sup.Spawn(key, supervisor.ServiceSpec{
 				Command: svc.Run,
 				WorkDir: newDir,
-				Env:     env,
+				Env:     d.env(uAddr, req.NewSHA, newDir, req, u.Environment, svc.Environment, u.Volumes),
 				LogFile: d.Paths.ServiceLog(key),
 			})
 		}
@@ -252,13 +257,12 @@ func (d *Deployer) rollback(
 		prevDir := filepath.Join(prevWorktree, req.Subdir)
 		for _, u := range prevUnits {
 			uAddr := unitAddress(req.Address, u.RelPath)
-			env := d.unitEnv(uAddr, req.Ref, req.PrevSHA, prevDir, u.Volumes)
 			for name, svc := range u.Services {
 				key := serviceKey(uAddr, name)
 				d.Sup.Spawn(key, supervisor.ServiceSpec{
 					Command: svc.Run,
 					WorkDir: prevDir,
-					Env:     env,
+					Env:     d.env(uAddr, req.PrevSHA, prevDir, req, u.Environment, svc.Environment, u.Volumes),
 					LogFile: d.Paths.ServiceLog(key),
 				})
 			}
@@ -336,22 +340,22 @@ func (d *Deployer) verify(units []config.InlineUnit, base string) error {
 	}
 }
 
-// unitEnv builds the environment for a unit's services: the host environment plus
-// NEXUS_* variables and the unit's volume paths (namespaced by the unit's address).
-func (d *Deployer) unitEnv(address, ref, sha, worktree string, volumes map[string]struct{}) []string {
-	env := append(os.Environ(),
-		"NEXUS_PROJECT="+address,
-		"NEXUS_SHA="+sha,
-		"NEXUS_REF="+ref,
-		"NEXUS_WORKTREE="+worktree,
-	)
-	for name := range volumes {
-		upper := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
-		volPath := d.Paths.VolumeDir(address, name)
-		_ = os.MkdirAll(volPath, 0o755)
-		env = append(env, "NEXUS_VOLUME_"+upper+"="+volPath)
-	}
-	return env
+// env builds the process environment for a unit's build or service commands via
+// the penv package: the host environment, NEXUS_* contract variables, the unit's
+// own and every project's volume paths, the app's .env, and the project- and
+// service-level environment: maps (svcEnv is nil for the build step).
+func (d *Deployer) env(uAddr, sha, workDir string, req Request, projEnv, svcEnv map[string]string, ownVols map[string]struct{}) []string {
+	return penv.Build(penv.Input{
+		Paths:         d.Paths,
+		Address:       uAddr,
+		Ref:           req.Ref,
+		SHA:           sha,
+		WorkDir:       workDir,
+		OwnVolumes:    ownVols,
+		GlobalVolumes: req.GlobalVolumeEnv,
+		ProjectEnv:    projEnv,
+		ServiceEnv:    svcEnv,
+	})
 }
 
 // unitAddress joins a base address with a unit's relative alias chain.

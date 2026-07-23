@@ -17,6 +17,8 @@
 | `project add`/`remove` reconcile the running daemon live (`POST /projects`) — no restart | ✅ | ✅ | ✅ |
 | `nexus version` / `--version` — release tag injected at build time (`-X main.version`), VCS-info fallback | ✅ | ✅ | ✅ |
 | Clear error when `NEXUS_HOME` makes a socket path exceed the OS Unix-socket limit (not a bare `invalid argument`) | ✅ | ✅ | ✅ |
+| `environment:` on projects and services (docker-compose map/list forms) with `${VAR}` interpolation + `.env` file | ✅ | ✅ | ✅ |
+| Global `NEXUS_<PROJECT>_<VOLUME>` env var — reference another project's volume path without hardcoding | ✅ | ✅ | ✅ |
 | **Configuration** |
 | `nexus.yaml` parser (external projects, inline projects, recursive `projects:`) | ✅ | ✅ | ✅ |
 | Project name inference from spec path (final segment default) | ✅ | ✅ | ✅ |
