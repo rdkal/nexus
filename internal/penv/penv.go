@@ -38,13 +38,33 @@ type Input struct {
 	ServiceEnv map[string]string
 }
 
+// passthrough is the allowlist of daemon environment variables a project's
+// processes inherit — the essentials for finding binaries, the home directory,
+// and locale. Every *other* daemon variable is withheld, so a secret set for one
+// project is not visible to another: a project sees only what it declares (plus
+// the NEXUS_* contract). A specific daemon variable can still be forwarded
+// on purpose via interpolation, e.g. environment: { TOKEN: ${DAEMON_TOKEN} }.
+var passthrough = []string{
+	"PATH", "HOME", "USER", "LOGNAME", "SHELL",
+	"LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE",
+	"TERM", "TZ", "TMPDIR",
+}
+
 // Build assembles the final environment slice (KEY=VALUE entries, sorted).
 func Build(in Input) []string {
-	// Layer 1: the daemon's own environment (PATH, HOME, any operator-set vars).
-	base := envMap(os.Environ())
+	host := envMap(os.Environ())
+
+	// Layer 1: only the allowlisted essentials from the daemon environment.
+	base := make(map[string]string, len(passthrough))
+	for _, k := range passthrough {
+		if v, ok := host[k]; ok {
+			base[k] = v
+		}
+	}
 
 	// Layer 2: the NEXUS_* contract. Kept authoritative — user env cannot shadow it.
 	nx := map[string]string{
+		"NEXUS_HOME":     in.Paths.Home,
 		"NEXUS_PROJECT":  in.Address,
 		"NEXUS_SHA":      in.SHA,
 		"NEXUS_REF":      in.Ref,
@@ -62,14 +82,15 @@ func Build(in Input) []string {
 	// Layer 3: .env next to the app's nexus.yaml.
 	dotenv := readDotenv(filepath.Join(in.WorkDir, ".env"))
 
-	// Interpolation lookup: everything resolved so far, so ${NEXUS_TRAEFIK_DYNAMIC}
-	// and ${SOME_DOTENV_VAR} both resolve inside environment: values.
-	lookup := merge(base, dotenv, nx)
+	// Interpolation may reference any daemon variable by name (opt-in forwarding),
+	// plus everything nexus provides and the .env — but the full host environment
+	// is only a *lookup* source, never copied into the result.
+	lookup := merge(host, nx, dotenv)
 	proj := interpolateAll(in.ProjectEnv, lookup)
 	lookup = merge(lookup, proj)
 	svc := interpolateAll(in.ServiceEnv, lookup)
 
-	// Final precedence, last wins: base < dotenv < project < service < NEXUS_*.
+	// Final precedence, last wins: essentials < .env < project < service < NEXUS_*.
 	final := merge(base, dotenv, proj, svc, nx)
 	return sortedEnv(final)
 }

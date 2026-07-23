@@ -59,9 +59,16 @@ func (e *Env) UnmarshalYAML(node *yaml.Node) error {
 			return err
 		}
 		for _, item := range list {
-			k, v, _ := strings.Cut(item, "=")
-			if k = strings.TrimSpace(k); k != "" {
+			k, v, ok := strings.Cut(item, "=")
+			k = strings.TrimSpace(k)
+			if k == "" {
+				continue
+			}
+			if ok {
 				out[k] = v
+			} else {
+				// A bare "KEY" (no =) forwards the daemon's value, docker-compose style.
+				out[k] = "${" + k + "}"
 			}
 		}
 	default:

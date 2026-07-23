@@ -71,6 +71,30 @@ def test_dotenv_file_is_loaded(nexus, git_repo):
     assert "TOKEN=abc123" in log
 
 
+ISOLATION_YAML = """\
+services:
+  api:
+    environment:
+      FORWARDED: ${DAEMON_SECRET}
+    run: sh -c 'echo LEAK=[$DAEMON_SECRET] FWD=[$FORWARDED]; exec sleep 3600'
+"""
+
+
+def test_daemon_secret_not_leaked_but_forwardable(nexus, git_repo):
+    # A secret in the daemon's own environment...
+    git_repo.commit({"nexus.yaml": ISOLATION_YAML})
+    nexus.add_project(git_repo.spec_path, "app")
+    nexus.start(poll_interval="2s", extra_env={"DAEMON_SECRET": "s3cr3t"})
+    nexus.wait_for_socket()
+    nexus.wait_for_sha("app")
+
+    log = _wait_log(nexus.client, "app", "api", "LEAK=")
+    # ...is NOT visible to the project by default,
+    assert "LEAK=[]" in log, log
+    # ...but IS available when the project forwards it explicitly.
+    assert "FWD=[s3cr3t]" in log, log
+
+
 TRAEFIK_YAML = """\
 volumes:
   dynamic: {}

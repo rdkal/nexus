@@ -389,10 +389,17 @@ services:
   api:
     environment:
       ROUTES_DIR: ${NEXUS_TRAEFIK_DYNAMIC}/authelia   # reference another project's volume
+      TOKEN: ${CF_DNS_API_TOKEN}                      # forward one daemon variable, on purpose
     run: ./api
 ```
 
-Precedence, low to high: daemon env → `.env` → project `environment` → service
+Processes are isolated from each other: they inherit only `PATH`, `HOME` and a few
+essentials from the daemon — not its full environment — so a secret set for one project is
+never visible to another. A project gets only what it declares (plus the `NEXUS_*` contract).
+To hand a project a specific daemon variable, forward it by name: `TOKEN: ${CF_DNS_API_TOKEN}`
+(or the bare list form `- CF_DNS_API_TOKEN`).
+
+Precedence, low to high: essentials → `.env` → project `environment` → service
 `environment` → `NEXUS_*` (which stay authoritative).
 
 ---

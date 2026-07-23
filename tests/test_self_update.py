@@ -26,7 +26,12 @@ services:
 """
 
 # Stand-in for nexus's own nexus.yaml: atomically swap the runtime binary, no services.
+# NEXUS_SELFTEST_BIN is a daemon-env var specific to this test; since projects are
+# isolated from the daemon's environment, forward it explicitly (bare-key form).
+# (Real self-update's build only needs NEXUS_HOME/NEXUS_SHA, which are injected.)
 SELF_YAML = (
+    "environment:\n"
+    "  - NEXUS_SELFTEST_BIN\n"
     'build: cp "$NEXUS_SELFTEST_BIN" "$NEXUS_HOME/bin/.nexus.new" '
     '&& chmod +x "$NEXUS_HOME/bin/.nexus.new" '
     '&& mv "$NEXUS_HOME/bin/.nexus.new" "$NEXUS_HOME/bin/nexus"\n'

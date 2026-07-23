@@ -338,3 +338,20 @@ projects:
 		t.Errorf("metrics env = %+v", metrics)
 	}
 }
+
+func TestParseEnvironmentBareKeyForwards(t *testing.T) {
+	f, err := config.ParseBytes([]byte(`
+services:
+  api:
+    run: ./api
+    environment:
+      - CF_TOKEN
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A bare key becomes ${KEY}, which penv resolves from the daemon environment.
+	if got := f.Services["api"].Environment["CF_TOKEN"]; got != "${CF_TOKEN}" {
+		t.Errorf("bare key forward = %q, want ${CF_TOKEN}", got)
+	}
+}

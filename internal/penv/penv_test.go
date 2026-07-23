@@ -106,6 +106,44 @@ func TestNexusContractNotOverridable(t *testing.T) {
 	}
 }
 
+func TestDaemonEnvIsNotLeaked(t *testing.T) {
+	// A secret in the daemon's environment must not reach a project's processes...
+	t.Setenv("SOME_PROJECT_SECRET", "leaked")
+	// ...but essentials still pass through, and NEXUS_HOME is injected.
+	t.Setenv("PATH", "/usr/bin:/bin")
+
+	paths := home.NewPaths(t.TempDir())
+	env := Build(Input{Paths: paths, Address: "app", WorkDir: "/wt"})
+
+	if _, ok := find(env, "SOME_PROJECT_SECRET"); ok {
+		t.Error("daemon secret leaked into project environment")
+	}
+	if v, ok := find(env, "PATH"); !ok || v != "/usr/bin:/bin" {
+		t.Errorf("PATH should pass through, got %q ok=%v", v, ok)
+	}
+	if v, _ := find(env, "NEXUS_HOME"); v != paths.Home {
+		t.Errorf("NEXUS_HOME = %q, want %q", v, paths.Home)
+	}
+}
+
+func TestExplicitForwardFromDaemonEnv(t *testing.T) {
+	// A project can opt in to a specific daemon variable by naming it.
+	t.Setenv("CF_DNS_API_TOKEN", "s3cr3t")
+	env := Build(Input{
+		Paths:      home.NewPaths(t.TempDir()),
+		Address:    "traefik",
+		WorkDir:    "/wt",
+		ServiceEnv: map[string]string{"TOKEN": "${CF_DNS_API_TOKEN}"},
+	})
+	if v, _ := find(env, "TOKEN"); v != "s3cr3t" {
+		t.Errorf("explicit forward TOKEN = %q, want s3cr3t", v)
+	}
+	// The original daemon var name is still not present on its own.
+	if _, ok := find(env, "CF_DNS_API_TOKEN"); ok {
+		t.Error("daemon var should not appear unless explicitly named as a key")
+	}
+}
+
 func TestInterpolate(t *testing.T) {
 	lookup := map[string]string{"A": "1", "B_C": "two"}
 	cases := map[string]string{
