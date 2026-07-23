@@ -386,7 +386,8 @@ Environment variables, docker-compose style. Set at the top level (applies to th
 every service) and/or per service (overrides the project value). Values may use `${VAR}`
 interpolation; a reference to a variable that is defined nowhere **fails the deploy** (before
 any old service is stopped) rather than silently expanding to empty — so a typo or a missing
-secret is caught, not shipped.
+secret is caught, not shipped. Use `${VAR:-default}` to opt out (default when `VAR` is unset
+or empty; `${VAR-default}` only when unset), which never errors.
 
 Two `.env` files are loaded automatically: one next to the `nexus.yaml` (committed defaults),
 and `$NEXUS_HOME/env/<project>.env` — the operator's file, **not** in git and persistent

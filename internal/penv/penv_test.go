@@ -202,6 +202,44 @@ func TestInterpolate(t *testing.T) {
 	}
 }
 
+func TestInterpolateDefaults(t *testing.T) {
+	lookup := map[string]string{"SET": "val", "EMPTY": ""}
+	defined := map[string]string{"SET": "", "EMPTY": ""}
+	cases := map[string]string{
+		"${SET:-fb}":     "val", // set and non-empty → value
+		"${MISSING:-fb}": "fb",  // unset → default
+		"${EMPTY:-fb}":   "fb",  // empty → default (colon form)
+		"${EMPTY-fb}":    "",    // empty but set → value (no colon)
+		"${MISSING-fb}":  "fb",  // unset → default (no colon)
+		"${SET:-${EMPTY:-nested}}": "val", // default not evaluated when SET present
+		"a${MISSING:-b}c":         "abc",
+	}
+	for in, want := range cases {
+		miss := map[string]string{}
+		if got := interpolate(in, lookup, defined, miss); got != want {
+			t.Errorf("interpolate(%q) = %q, want %q", in, got, want)
+		}
+		if len(miss) != 0 { // a default must never mark a variable missing
+			t.Errorf("interpolate(%q) recorded missing %v", in, miss)
+		}
+	}
+}
+
+func TestBuildDefaultSuppressesError(t *testing.T) {
+	env, err := Build(Input{
+		Paths:      home.NewPaths(t.TempDir()),
+		Address:    "app",
+		WorkDir:    "/wt",
+		ServiceEnv: map[string]string{"PORT": "${UNSET_PORT:-8080}"},
+	})
+	if err != nil {
+		t.Fatalf("default should suppress the undefined-var error: %v", err)
+	}
+	if v, _ := find(env, "PORT"); v != "8080" {
+		t.Errorf("PORT = %q, want 8080", v)
+	}
+}
+
 func TestBuildErrorsOnUndefinedVariable(t *testing.T) {
 	_, err := Build(Input{
 		Paths:      home.NewPaths(t.TempDir()),

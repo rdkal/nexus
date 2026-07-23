@@ -22,6 +22,7 @@
 | Env isolation — processes inherit only allowlisted essentials + declared env, not the daemon's full env; daemon vars forwarded only when named | ✅ | ✅ | ✅ |
 | Operator `.env` at `$NEXUS_HOME/env/<project>.env` — host-specific config/secrets outside git, overrides repo values | ✅ | ✅ | ✅ |
 | Undefined `${VAR}` reference fails the deploy (before stopping old services) instead of expanding to empty | ✅ | ✅ | ✅ |
+| `${VAR:-default}` / `${VAR-default}` opt-out — supply a fallback instead of erroring | ✅ | ✅ | ✅ |
 | **Configuration** |
 | `nexus.yaml` parser (external projects, inline projects, recursive `projects:`) | ✅ | ✅ | ✅ |
 | Project name inference from spec path (final segment default) | ✅ | ✅ | ✅ |

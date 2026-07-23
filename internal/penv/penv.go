@@ -174,18 +174,20 @@ func interpolateAll(in, lookup, defined, missing map[string]string) map[string]s
 	return out
 }
 
-// interpolate expands ${VAR} and $VAR references from lookup. $$ is a literal $.
-// Any referenced name absent from defined is recorded in missing (a name that is
-// defined but empty is fine); the caller turns a non-empty missing set into an error.
+// interpolate expands variable references from lookup. Supported forms, matching
+// docker compose:
+//
+//	$NAME, ${NAME}          the variable (error if defined nowhere)
+//	${NAME:-default}        NAME if set and non-empty, else default
+//	${NAME-default}         NAME if set (even empty), else default
+//	$$                      a literal $
+//
+// A reference with a default never errors. A plain reference whose name is absent
+// from defined is recorded in missing (defined-but-empty is fine); the caller
+// turns a non-empty missing set into an error.
 func interpolate(s string, lookup, defined, missing map[string]string) string {
 	if !strings.ContainsRune(s, '$') {
 		return s
-	}
-	resolve := func(name string) string {
-		if _, ok := defined[name]; !ok {
-			missing[name] = ""
-		}
-		return lookup[name]
 	}
 	var b strings.Builder
 	i := 0
@@ -200,10 +202,10 @@ func interpolate(s string, lookup, defined, missing map[string]string) string {
 			i += 2
 			continue
 		}
-		if i+1 < len(s) && s[i+1] == '{' { // ${NAME}
-			if end := strings.IndexByte(s[i+2:], '}'); end >= 0 {
-				b.WriteString(resolve(s[i+2 : i+2+end]))
-				i = i + 2 + end + 1
+		if i+1 < len(s) && s[i+1] == '{' { // ${...}
+			if end := matchBrace(s, i+1); end >= 0 {
+				b.WriteString(resolveBrace(s[i+2:end], lookup, defined, missing))
+				i = end + 1
 				continue
 			}
 		}
@@ -213,7 +215,7 @@ func interpolate(s string, lookup, defined, missing map[string]string) string {
 			j++
 		}
 		if j > i+1 {
-			b.WriteString(resolve(s[i+1 : j]))
+			b.WriteString(resolvePlain(s[i+1:j], lookup, defined, missing))
 			i = j
 			continue
 		}
@@ -221,6 +223,52 @@ func interpolate(s string, lookup, defined, missing map[string]string) string {
 		i++
 	}
 	return b.String()
+}
+
+// matchBrace returns the index of the '}' closing the '{' at open, honoring
+// nested ${...}, or -1 if unmatched.
+func matchBrace(s string, open int) int {
+	depth := 0
+	for j := open; j < len(s); j++ {
+		switch s[j] {
+		case '{':
+			depth++
+		case '}':
+			if depth--; depth == 0 {
+				return j
+			}
+		}
+	}
+	return -1
+}
+
+// resolvePlain resolves a bare NAME, recording it as missing if undefined.
+func resolvePlain(name string, lookup, defined, missing map[string]string) string {
+	if _, ok := defined[name]; !ok {
+		missing[name] = ""
+	}
+	return lookup[name]
+}
+
+// resolveBrace resolves the contents of a ${...}, handling :-  and - defaults.
+// The default is evaluated (and its own references checked) only when actually
+// used, so ${SET:-${OTHER}} never faults on OTHER when SET is present.
+func resolveBrace(expr string, lookup, defined, missing map[string]string) string {
+	if idx := strings.Index(expr, ":-"); idx >= 0 {
+		name := expr[:idx]
+		if v := lookup[name]; v != "" {
+			return v
+		}
+		return interpolate(expr[idx+2:], lookup, defined, missing)
+	}
+	if idx := strings.IndexByte(expr, '-'); idx >= 0 {
+		name := expr[:idx]
+		if v, ok := lookup[name]; ok {
+			return v
+		}
+		return interpolate(expr[idx+1:], lookup, defined, missing)
+	}
+	return resolvePlain(expr, lookup, defined, missing)
 }
 
 func sortedKeys(m map[string]string) []string {

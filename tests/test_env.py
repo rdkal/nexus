@@ -121,6 +121,28 @@ def test_undefined_env_variable_fails_deploy(nexus, git_repo):
     assert not any(s.get("running") for s in svcs), svcs
 
 
+DEFAULT_ENV_YAML = """\
+services:
+  api:
+    environment:
+      PORT: ${MISSING_PORT:-8080}
+    run: sh -c 'echo PORT=$PORT; exec sleep 3600'
+"""
+
+
+def test_default_value_deploys(nexus, git_repo):
+    # ${VAR:-default} opts out of the undefined-var error: the deploy succeeds
+    # and the default is used.
+    git_repo.commit({"nexus.yaml": DEFAULT_ENV_YAML})
+    nexus.add_project(git_repo.spec_path, "app")
+    nexus.start(poll_interval="2s")
+    nexus.wait_for_socket()
+    nexus.wait_for_sha("app")
+
+    log = _wait_log(nexus.client, "app", "api", "PORT=")
+    assert "PORT=8080" in log, log
+
+
 def test_operator_env_file_in_nexus_home(nexus, git_repo):
     # Secrets/host config the operator sets WITHOUT touching the repo, at
     # $NEXUS_HOME/env/<project>.env.
