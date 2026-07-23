@@ -87,6 +87,35 @@ func TestServiceOverridesProjectOverridesDotenv(t *testing.T) {
 	}
 }
 
+func TestOperatorEnvFileOverridesRepoAndService(t *testing.T) {
+	paths := home.NewPaths(t.TempDir())
+	// Repo .env in the worktree.
+	work := t.TempDir()
+	if err := os.WriteFile(filepath.Join(work, ".env"), []byte("K=from_repo\nSECRET=repo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Operator .env at <home>/env/<address>.env.
+	if err := os.MkdirAll(paths.Env, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.EnvFile("app"), []byte("K=from_operator\nTOKEN=abc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := Build(Input{
+		Paths:      paths,
+		Address:    "app",
+		WorkDir:    work,
+		ServiceEnv: map[string]string{"K": "from_service"},
+	})
+	// Operator file wins over repo .env AND service environment:.
+	if v, _ := find(env, "K"); v != "from_operator" {
+		t.Errorf("operator .env should win: K = %q", v)
+	}
+	if v, _ := find(env, "TOKEN"); v != "abc" {
+		t.Errorf("operator-only var TOKEN = %q", v)
+	}
+}
+
 func TestNexusContractNotOverridable(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("NEXUS_PROJECT=hacked\n"), 0o600); err != nil {

@@ -95,6 +95,26 @@ def test_daemon_secret_not_leaked_but_forwardable(nexus, git_repo):
     assert "FWD=[s3cr3t]" in log, log
 
 
+def test_operator_env_file_in_nexus_home(nexus, git_repo):
+    # Secrets/host config the operator sets WITHOUT touching the repo, at
+    # $NEXUS_HOME/env/<project>.env.
+    git_repo.commit(
+        {"nexus.yaml": "services:\n  api:\n    run: sh -c 'echo TOKEN=$TOKEN; exec sleep 3600'\n"}
+    )
+    nexus.add_project(git_repo.spec_path, "app")
+
+    env_dir = nexus.home / "env"
+    env_dir.mkdir(parents=True, exist_ok=True)
+    (env_dir / "app.env").write_text("TOKEN=operator-secret\n")
+
+    nexus.start(poll_interval="2s")
+    nexus.wait_for_socket()
+    nexus.wait_for_sha("app")
+
+    log = _wait_log(nexus.client, "app", "api", "TOKEN=")
+    assert "TOKEN=operator-secret" in log, log
+
+
 TRAEFIK_YAML = """\
 volumes:
   dynamic: {}

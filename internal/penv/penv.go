@@ -79,19 +79,23 @@ func Build(in Input) []string {
 		nx[k] = v
 	}
 
-	// Layer 3: .env next to the app's nexus.yaml.
-	dotenv := readDotenv(filepath.Join(in.WorkDir, ".env"))
+	// Layer 3: two .env files — the repo's (committed defaults, next to nexus.yaml)
+	// and the operator's (<home>/env/<address>.env, not in git, host-specific
+	// secrets/overrides). The operator file wins.
+	repoEnv := readDotenv(filepath.Join(in.WorkDir, ".env"))
+	homeEnv := readDotenv(in.Paths.EnvFile(in.Address))
 
 	// Interpolation may reference any daemon variable by name (opt-in forwarding),
-	// plus everything nexus provides and the .env — but the full host environment
-	// is only a *lookup* source, never copied into the result.
-	lookup := merge(host, nx, dotenv)
+	// plus everything nexus provides and both .env files — but the full host
+	// environment is only a *lookup* source, never copied into the result.
+	lookup := merge(host, nx, repoEnv, homeEnv)
 	proj := interpolateAll(in.ProjectEnv, lookup)
 	lookup = merge(lookup, proj)
 	svc := interpolateAll(in.ServiceEnv, lookup)
 
-	// Final precedence, last wins: essentials < .env < project < service < NEXUS_*.
-	final := merge(base, dotenv, proj, svc, nx)
+	// Final precedence, last wins: essentials < repo .env < project < service <
+	// operator .env < NEXUS_*.
+	final := merge(base, repoEnv, proj, svc, homeEnv, nx)
 	return sortedEnv(final)
 }
 

@@ -228,6 +228,10 @@ $NEXUS_HOME/                                         default: ~/.nexus
 │       └── api/
 │           └── uploads/                             volume "uploads" in the api project
 │
+├── env/                                             operator .env files, keyed by address
+│   ├── my-system.env                                host-specific config/secrets (not in git)
+│   └── traefik.env
+│
 └── logs/                                            keyed by full resource address
     └── my-system/
         ├── <sha>-build.log
@@ -243,8 +247,8 @@ $NEXUS_HOME/                                         default: ~/.nexus
 
 `repos/` is keyed by spec path so bare clones are shared across all projects with the same
 URL. `volumes/` and `logs/` are keyed by resource address starting from the root project
-name. Operationally: volumes are the only thing that must be backed up; repos and logs
-can be freely wiped and rebuilt.
+name. Operationally: `volumes/` and `env/` are what must be backed up (data and operator
+secrets/config); repos and logs can be freely wiped and rebuilt.
 
 ---
 
@@ -379,8 +383,12 @@ Key: service name. Unique within this deployment alongside volume names and proj
 #### `environment` (map or list)
 
 Environment variables, docker-compose style. Set at the top level (applies to the build and
-every service) and/or per service (overrides the project value). A `.env` file next to the
-`nexus.yaml` is also loaded. Values may use `${VAR}` interpolation.
+every service) and/or per service (overrides the project value). Values may use `${VAR}`
+interpolation.
+
+Two `.env` files are loaded automatically: one next to the `nexus.yaml` (committed defaults),
+and `$NEXUS_HOME/env/<project>.env` — the operator's file, **not** in git and persistent
+across deploys. Put host-specific config and secrets there; it overrides the repo's values.
 
 ```yaml
 environment:          # map form (or a "- KEY=value" list)
@@ -399,8 +407,8 @@ never visible to another. A project gets only what it declares (plus the `NEXUS_
 To hand a project a specific daemon variable, forward it by name: `TOKEN: ${CF_DNS_API_TOKEN}`
 (or the bare list form `- CF_DNS_API_TOKEN`).
 
-Precedence, low to high: essentials → `.env` → project `environment` → service
-`environment` → `NEXUS_*` (which stay authoritative).
+Precedence, low to high: essentials → repo `.env` → project `environment` → service
+`environment` → `$NEXUS_HOME/env/<project>.env` → `NEXUS_*` (which stay authoritative).
 
 ---
 

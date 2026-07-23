@@ -22,7 +22,7 @@ func Dir() (string, error) {
 
 // Setup creates the standard NEXUS_HOME directory structure. Idempotent.
 func Setup(dir string) error {
-	for _, sub := range []string{"bin", "repos", "volumes", "logs"} {
+	for _, sub := range []string{"bin", "repos", "volumes", "logs", "env"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
 			return fmt.Errorf("create %s/%s: %w", dir, sub, err)
 		}
@@ -37,6 +37,7 @@ type Paths struct {
 	Repos    string
 	Volumes  string
 	Logs     string
+	Env      string // operator-managed per-project .env files (env/<address>.env)
 	DB       string
 	Socket   string // nexus runtime API socket (nexus.sock)
 	PMSocket string // nexus-pm process manager API socket (nexus-pm.sock)
@@ -70,10 +71,18 @@ func NewPaths(home string) Paths {
 		Repos:    filepath.Join(home, "repos"),
 		Volumes:  filepath.Join(home, "volumes"),
 		Logs:     filepath.Join(home, "logs"),
+		Env:      filepath.Join(home, "env"),
 		DB:       filepath.Join(home, "nexus.db"),
 		Socket:   filepath.Join(home, "nexus.sock"),
 		PMSocket: filepath.Join(home, "nexus-pm.sock"),
 	}
+}
+
+// EnvFile returns the operator-managed .env path for a project address:
+// <home>/env/<address>.env. Not tracked in git and persistent across deploys —
+// the place to put host-specific config and secrets. Missing file → ignored.
+func (p Paths) EnvFile(address string) string {
+	return filepath.Join(p.Env, address+".env")
 }
 
 // VolumeDir returns the filesystem path for a named volume at the given resource address.

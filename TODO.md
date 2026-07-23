@@ -20,6 +20,7 @@
 | `environment:` on projects and services (docker-compose map/list forms) with `${VAR}` interpolation + `.env` file | ✅ | ✅ | ✅ |
 | Global `NEXUS_<PROJECT>_<VOLUME>` env var — reference another project's volume path without hardcoding | ✅ | ✅ | ✅ |
 | Env isolation — processes inherit only allowlisted essentials + declared env, not the daemon's full env; daemon vars forwarded only when named | ✅ | ✅ | ✅ |
+| Operator `.env` at `$NEXUS_HOME/env/<project>.env` — host-specific config/secrets outside git, overrides repo values | ✅ | ✅ | ✅ |
 | **Configuration** |
 | `nexus.yaml` parser (external projects, inline projects, recursive `projects:`) | ✅ | ✅ | ✅ |
 | Project name inference from spec path (final segment default) | ✅ | ✅ | ✅ |
