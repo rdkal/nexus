@@ -44,8 +44,8 @@ build: go build -o server ./cmd/server
 volumes:
   data: {}
 
-# Environment variables (optional) — docker-compose style, at the project
-# level and/or per service. A .env file next to this one is also loaded.
+# Environment variables (optional) — like docker compose. A .env file
+# next to this one is loaded too.
 environment:
   LOG_LEVEL: info
 
