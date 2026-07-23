@@ -273,6 +273,24 @@ func (d *Daemon) runPoller(ctx context.Context, ps *projectState) {
 	pol.Run(ctx, ps.queue, lastSHA)
 }
 
+// maxDeployRetryDelay caps the exponential backoff between failed-deploy retries.
+const maxDeployRetryDelay = 60 * time.Second
+
+// retryBackoff returns the delay before retrying a failed deploy: 1s, 2s, 4s …
+// doubling per attempt, capped at maxDeployRetryDelay. It never gives up — a
+// persistently-failing SHA retries at the cap until it succeeds or a new commit
+// supersedes it (the same steady cost as polling).
+func retryBackoff(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	d := time.Second << (attempt - 1)
+	if d <= 0 || d > maxDeployRetryDelay { // shift overflow or over the cap
+		return maxDeployRetryDelay
+	}
+	return d
+}
+
 // deployLoop consumes SHAs from the queue and runs the deployment lifecycle.
 func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 	dep := &lifecycle.Deployer{
@@ -281,10 +299,33 @@ func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 		Paths: d.Paths,
 	}
 
+	// A failed deploy is retried with exponential backoff (capped) rather than
+	// waiting for a new commit, so a transient failure — a flaky clone, a build
+	// dependency briefly unavailable, or a self-update racing the release
+	// workflow's binary upload — self-heals. A newer SHA arriving during backoff
+	// supersedes the retry.
+	var retryDelay time.Duration
+	var failedSHA string
+	var attempt int
+
 	for {
-		sha, ok := ps.queue.WaitPop(ctx)
-		if !ok {
-			return
+		var sha string
+		if retryDelay > 0 {
+			s, ok := ps.queue.WaitPopTimeout(ctx, retryDelay)
+			if ctx.Err() != nil {
+				return
+			}
+			if ok {
+				sha, attempt, retryDelay, failedSHA = s, 0, 0, "" // superseded by a new SHA
+			} else {
+				sha = failedSHA // backoff elapsed → retry the same SHA
+			}
+		} else {
+			s, ok := ps.queue.WaitPop(ctx)
+			if !ok {
+				return
+			}
+			sha = s
 		}
 
 		ps.mu.RLock()
@@ -308,9 +349,14 @@ func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 		}
 
 		if err := dep.Deploy(ctx, req); err != nil {
-			slog.Error("daemon: deploy failed", "address", ps.address, "sha", sha, "err", err)
+			attempt++
+			failedSHA = sha
+			retryDelay = retryBackoff(attempt)
+			slog.Warn("daemon: deploy failed; will retry", "address", ps.address, "sha", sha,
+				"attempt", attempt, "retry_in", retryDelay, "err", err)
 			continue
 		}
+		attempt, retryDelay, failedSHA = 0, 0, "" // success clears the retry state
 
 		// Capture flattened service specs (including inline sub-projects) so manual
 		// restarts can re-spawn with the same config. Deploy already spawned them.

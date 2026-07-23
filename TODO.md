@@ -55,6 +55,7 @@
 | CHECKOUT: `git worktree add` at project alias path under root spec-path | ✅ | ✅ | ✅ |
 | BUILD: `sh -c` in nexus.yaml directory, log to `logs/<address>/<sha>-build.log` | ✅ | ✅ | ✅ |
 | Failed build: remove worktree, mark SHA failed, keep current services | ✅ | ✅ | ✅ |
+| Retry a failed deploy with capped exponential backoff (self-heal transient failures / self-update release race) — not only on a new commit | ✅ | ✅ | ✅ |
 | SHUTDOWN: SIGTERM all services, 30s grace, SIGKILL survivors | ✅ | ✅ | ✅ |
 | STARTUP: spawn services from new worktree | ✅ | ✅ | ✅ |
 | VERIFY: 5-second window, any exit triggers rollback | ✅ | ✅ | ✅ |
