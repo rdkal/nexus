@@ -157,8 +157,55 @@ func projectCmd(homeFlag *string) *cobra.Command {
 	}
 	cmd.AddCommand(projectAddCmd(homeFlag))
 	cmd.AddCommand(projectRemoveCmd(homeFlag))
+	cmd.AddCommand(projectStopCmd(homeFlag))
+	cmd.AddCommand(projectStartCmd(homeFlag))
 	cmd.AddCommand(projectListCmd(homeFlag))
 	return cmd
+}
+
+// projectStopCmd pauses a project: its services (and nested sub-projects) stop,
+// but its row and current SHA stay in the DB, so it remains stopped across daemon
+// restarts until `project start`. Distinct from `remove`, which forgets it.
+func projectStopCmd(homeFlag *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop <name>",
+		Short: "Pause a project for maintenance (keeps it tracked)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return setStopped(*homeFlag, args[0], true)
+		},
+	}
+}
+
+// projectStartCmd resumes a paused project, which recovers from its last SHA.
+func projectStartCmd(homeFlag *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "start <name>",
+		Short: "Resume a paused project",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return setStopped(*homeFlag, args[0], false)
+		},
+	}
+}
+
+func setStopped(homeFlag, name string, stopped bool) error {
+	database, err := openDB(homeFlag)
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+
+	if err := database.SetStopped(name, stopped); err != nil {
+		return err
+	}
+	if stopped {
+		fmt.Printf("stopped project %q\n", name)
+	} else {
+		fmt.Printf("started project %q\n", name)
+	}
+	notifyDaemon(homeFlag) // reconcile: stop or resume it now
+	return nil
 }
 
 func projectAddCmd(homeFlag *string) *cobra.Command {
@@ -261,6 +308,9 @@ func projectListCmd(homeFlag *string) *cobra.Command {
 				sha := p.CurrentSHA
 				if sha == "" {
 					sha = "(not deployed)"
+				}
+				if p.Stopped {
+					sha += "  (stopped)"
 				}
 				fmt.Printf("%-20s  %-45s  %-10s  %s\n", p.Name, p.SpecPath, p.Ref, sha)
 			}

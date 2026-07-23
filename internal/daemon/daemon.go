@@ -112,6 +112,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	for _, p := range projects {
+		if p.Stopped {
+			slog.Info("daemon: project is stopped; not starting", "name", p.Name)
+			continue
+		}
 		if err := d.startProjectState(ctx, rootState(p)); err != nil {
 			slog.Error("daemon: failed to start project", "address", p.Name, "err", err)
 		}
@@ -145,8 +149,14 @@ func (d *Daemon) reconcileRoots() {
 		slog.Error("daemon: reconcile: list projects", "err", err)
 		return
 	}
+	// "want" is the set that should be RUNNING: tracked and not stopped. A stopped
+	// project is absent here, so it is treated like a removed one for running state
+	// (its services are stopped) while its DB row and SHA remain — that is the pause.
 	want := make(map[string]db.Project, len(projects))
 	for _, p := range projects {
+		if p.Stopped {
+			continue
+		}
 		want[p.Name] = p
 	}
 
@@ -169,7 +179,7 @@ func (d *Daemon) reconcileRoots() {
 	d.mu.RUnlock()
 
 	for _, ps := range toStop {
-		slog.Info("daemon: project removed from db; stopping", "name", ps.address)
+		slog.Info("daemon: stopping project (removed or paused)", "name", ps.address)
 		d.stopProjectState(ps)
 	}
 	ctx := d.ctx
@@ -177,9 +187,9 @@ func (d *Daemon) reconcileRoots() {
 		ctx = context.Background()
 	}
 	for _, p := range toStart {
-		slog.Info("daemon: project added; starting", "name", p.Name)
+		slog.Info("daemon: starting project (added or resumed)", "name", p.Name)
 		if err := d.startProjectState(ctx, rootState(p)); err != nil {
-			slog.Error("daemon: failed to start added project", "name", p.Name, "err", err)
+			slog.Error("daemon: failed to start project", "name", p.Name, "err", err)
 		}
 	}
 }
