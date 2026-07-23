@@ -14,6 +14,7 @@ import (
 	"github.com/rdkal/nexus/internal/git"
 	"github.com/rdkal/nexus/internal/home"
 	"github.com/rdkal/nexus/internal/lifecycle"
+	"github.com/rdkal/nexus/internal/penv"
 	"github.com/rdkal/nexus/internal/poller"
 	"github.com/rdkal/nexus/internal/supervisor"
 )
@@ -281,16 +282,17 @@ func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 		ps.mu.RUnlock()
 
 		req := lifecycle.Request{
-			Name:         ps.address,
-			Address:      ps.address,
-			Ref:          ps.ref,
-			SpecPath:     ps.specPath,
-			RootSpecPath: ps.rootSpecPath,
-			Aliases:      ps.aliases,
-			Subdir:       ps.subdir,
-			NewSHA:       sha,
-			PrevSHA:      prevSHA,
-			PrevConfig:   prevCfg,
+			Name:            ps.address,
+			Address:         ps.address,
+			Ref:             ps.ref,
+			SpecPath:        ps.specPath,
+			RootSpecPath:    ps.rootSpecPath,
+			Aliases:         ps.aliases,
+			Subdir:          ps.subdir,
+			GlobalVolumeEnv: d.globalVolumeEnv(),
+			NewSHA:          sha,
+			PrevSHA:         prevSHA,
+			PrevConfig:      prevCfg,
 		}
 
 		if err := dep.Deploy(ctx, req); err != nil {
@@ -485,17 +487,32 @@ func (d *Daemon) restartRuntime(project string) {
 // "metrics/exporter"). The full supervisor key is serviceKey(address, relName).
 func (d *Daemon) flattenedSpecs(address, ref, sha, appDir string, cfg *config.ProjectFile) map[string]supervisor.ServiceSpec {
 	units, _ := cfg.Flatten()
+	globalVols := d.globalVolumeEnv()
 	specs := make(map[string]supervisor.ServiceSpec)
 	for _, u := range units {
 		relPrefix := strings.Join(u.RelPath, "/")
 		uAddr := subAddress(address, u.RelPath)
-		env := d.unitEnv(uAddr, ref, sha, appDir, u.Volumes)
 		for name, svc := range u.Services {
 			relName := name
 			if relPrefix != "" {
 				relName = relPrefix + "/" + name
 			}
 			key := serviceKey(address, relName)
+			env, err := penv.Build(penv.Input{
+				Paths:         d.Paths,
+				Address:       uAddr,
+				Ref:           ref,
+				SHA:           sha,
+				WorkDir:       appDir,
+				OwnVolumes:    u.Volumes,
+				GlobalVolumes: globalVols,
+				ProjectEnv:    u.Environment,
+				ServiceEnv:    svc.Environment,
+			})
+			if err != nil {
+				slog.Warn("daemon: skipping service with unresolved environment", "service", key, "err", err)
+				continue
+			}
 			specs[relName] = supervisor.ServiceSpec{
 				Command: svc.Run,
 				WorkDir: appDir,
@@ -507,22 +524,27 @@ func (d *Daemon) flattenedSpecs(address, ref, sha, appDir string, cfg *config.Pr
 	return specs
 }
 
-// unitEnv constructs the NEXUS_* environment for one unit's services, namespacing
-// volumes by the unit's address.
-func (d *Daemon) unitEnv(address, ref, sha, worktree string, volumes map[string]struct{}) []string {
-	env := append(os.Environ(),
-		"NEXUS_PROJECT="+address,
-		"NEXUS_SHA="+sha,
-		"NEXUS_REF="+ref,
-		"NEXUS_WORKTREE="+worktree,
-	)
-	for name := range volumes {
-		upper := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
-		volPath := d.Paths.VolumeDir(address, name)
-		_ = os.MkdirAll(volPath, 0o755)
-		env = append(env, "NEXUS_VOLUME_"+upper+"="+volPath)
+// globalVolumeEnv maps NEXUS_<PROJECT>_<VOLUME> variable names to absolute paths
+// for every volume of every live project (including inline sub-projects), so one
+// project's processes can reference another's volume without hardcoding a path.
+// A project appears once it has deployed (its config is known).
+func (d *Daemon) globalVolumeEnv() map[string]string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := map[string]string{}
+	for _, ps := range d.projects {
+		if ps.cfg == nil {
+			continue
+		}
+		units, _ := ps.cfg.Flatten()
+		for _, u := range units {
+			uAddr := subAddress(ps.address, u.RelPath)
+			for vol := range u.Volumes {
+				out[penv.VolumeVar(uAddr, vol)] = d.Paths.VolumeDir(uAddr, vol)
+			}
+		}
 	}
-	return env
+	return out
 }
 
 // InjectProject seeds in-memory project state without starting the poller or deploy loop.

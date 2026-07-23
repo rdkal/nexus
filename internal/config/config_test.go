@@ -259,3 +259,99 @@ projects:
 		t.Errorf("db map = %+v", db)
 	}
 }
+
+func TestParseEnvironmentMapForm(t *testing.T) {
+	f, err := config.ParseBytes([]byte(`
+environment:
+  LOG_LEVEL: info
+  PORT: 8080
+services:
+  api:
+    run: ./api
+    environment:
+      API_KEY: secret
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Environment["LOG_LEVEL"] != "info" {
+		t.Errorf("project LOG_LEVEL = %q", f.Environment["LOG_LEVEL"])
+	}
+	if f.Environment["PORT"] != "8080" { // numbers stringify
+		t.Errorf("project PORT = %q, want \"8080\"", f.Environment["PORT"])
+	}
+	if f.Services["api"].Environment["API_KEY"] != "secret" {
+		t.Errorf("service API_KEY = %q", f.Services["api"].Environment["API_KEY"])
+	}
+}
+
+func TestParseEnvironmentListForm(t *testing.T) {
+	f, err := config.ParseBytes([]byte(`
+services:
+  api:
+    run: ./api
+    environment:
+      - API_KEY=secret
+      - EMPTY=
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := f.Services["api"].Environment
+	if env["API_KEY"] != "secret" {
+		t.Errorf("API_KEY = %q", env["API_KEY"])
+	}
+	if v, ok := env["EMPTY"]; !ok || v != "" {
+		t.Errorf("EMPTY = %q ok=%v", v, ok)
+	}
+}
+
+func TestFlattenCarriesEnvironment(t *testing.T) {
+	f, err := config.ParseBytes([]byte(`
+environment:
+  ROOT: 1
+projects:
+  metrics:
+    environment:
+      SUB: 2
+    services:
+      exp:
+        run: ./exp
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	units, _ := f.Flatten()
+	var base, metrics *config.InlineUnit
+	for i := range units {
+		switch len(units[i].RelPath) {
+		case 0:
+			base = &units[i]
+		case 1:
+			metrics = &units[i]
+		}
+	}
+	if base == nil || base.Environment["ROOT"] != "1" {
+		t.Errorf("base env = %+v", base)
+	}
+	if metrics == nil || metrics.Environment["SUB"] != "2" {
+		t.Errorf("metrics env = %+v", metrics)
+	}
+}
+
+func TestParseEnvironmentBareKeyForwards(t *testing.T) {
+	f, err := config.ParseBytes([]byte(`
+services:
+  api:
+    run: ./api
+    environment:
+      - CF_TOKEN
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A bare key becomes ${KEY}, which penv resolves from the daemon environment.
+	if got := f.Services["api"].Environment["CF_TOKEN"]; got != "${CF_TOKEN}" {
+		t.Errorf("bare key forward = %q, want ${CF_TOKEN}", got)
+	}
+}

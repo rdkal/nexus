@@ -69,7 +69,7 @@ NEXUS_HOME=$(cd "$NEXUS_HOME" && pwd)
 BIN="$NEXUS_HOME/bin"
 
 info "installing nexus to $NEXUS_HOME"
-mkdir -p "$BIN" "$NEXUS_HOME/repos" "$NEXUS_HOME/volumes" "$NEXUS_HOME/logs"
+mkdir -p "$BIN" "$NEXUS_HOME/repos" "$NEXUS_HOME/volumes" "$NEXUS_HOME/logs" "$NEXUS_HOME/env"
 
 # --- download the prebuilt binaries ---
 

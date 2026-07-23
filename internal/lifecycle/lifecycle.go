@@ -14,6 +14,7 @@ import (
 	"github.com/rdkal/nexus/internal/config"
 	"github.com/rdkal/nexus/internal/git"
 	"github.com/rdkal/nexus/internal/home"
+	"github.com/rdkal/nexus/internal/penv"
 	"github.com/rdkal/nexus/internal/supervisor"
 )
 
@@ -68,6 +69,11 @@ type Request struct {
 	Aliases      []string // alias chain from root to this project; nil for root projects
 	Subdir       string   // in-repo path to this app's nexus.yaml ("" = repo root)
 
+	// GlobalVolumeEnv maps NEXUS_<PROJECT>_<VOLUME> names to absolute paths for
+	// every project on the instance, so this project's processes can reference
+	// another project's volume by variable. Computed by the daemon per deploy.
+	GlobalVolumeEnv map[string]string
+
 	// Deployment SHAs
 	NewSHA  string
 	PrevSHA string // empty on first deployment
@@ -76,6 +82,13 @@ type Request struct {
 	// Needed to know which services to stop during SHUTDOWN and to re-spawn on ROLLBACK.
 	// Nil if this is the first deployment.
 	PrevConfig *config.ProjectFile
+}
+
+// plannedService is a service whose environment has been resolved and is ready
+// to spawn once old services are stopped.
+type plannedService struct {
+	key  string
+	spec supervisor.ServiceSpec
 }
 
 // Deploy runs the full deployment lifecycle:
@@ -174,38 +187,53 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 		return fmt.Errorf("record deployment: %w", err)
 	}
 
-	// BUILD each unit that declares one (skipped when no build: field). All builds
-	// run in the shared worktree, in deterministic (sorted) unit order.
+	failDeploy := func(format string, args ...any) error {
+		removeNewWorktree()
+		_ = d.DB.FinishDeployment(depID, "failed", time.Now())
+		return fmt.Errorf(format, args...)
+	}
+
+	// BUILD each unit that declares one, and compute every service's environment
+	// up front. Both resolve environment: references, so an undefined variable
+	// fails the deploy here — before any old service is stopped. Builds run in the
+	// shared worktree in deterministic (sorted) unit order.
+	var toSpawn []plannedService
 	for _, u := range newUnits {
-		if u.Build == "" {
-			continue
-		}
 		uAddr := unitAddress(req.Address, u.RelPath)
-		env := d.unitEnv(uAddr, req.Ref, req.NewSHA, newDir, u.Volumes)
-		buildLog := d.Paths.BuildLog(uAddr, req.NewSHA)
-		if err := runBuild(u.Build, newDir, env, buildLog); err != nil {
-			removeNewWorktree()
-			_ = d.DB.FinishDeployment(depID, "failed", time.Now())
-			return fmt.Errorf("build %s: %w", uAddr, err)
+		buildEnv, err := d.env(uAddr, req.NewSHA, newDir, req, u.Environment, nil, u.Volumes)
+		if err != nil {
+			return failDeploy("environment for %s: %w", uAddr, err)
+		}
+		if u.Build != "" {
+			buildLog := d.Paths.BuildLog(uAddr, req.NewSHA)
+			if err := runBuild(u.Build, newDir, buildEnv, buildLog); err != nil {
+				return failDeploy("build %s: %w", uAddr, err)
+			}
+		}
+		for name, svc := range u.Services {
+			key := serviceKey(uAddr, name)
+			svcEnv, err := d.env(uAddr, req.NewSHA, newDir, req, u.Environment, svc.Environment, u.Volumes)
+			if err != nil {
+				return failDeploy("environment for %s: %w", key, err)
+			}
+			toSpawn = append(toSpawn, plannedService{
+				key: key,
+				spec: supervisor.ServiceSpec{
+					Command: svc.Run,
+					WorkDir: newDir,
+					Env:     svcEnv,
+					LogFile: d.Paths.ServiceLog(key),
+				},
+			})
 		}
 	}
 
 	// SHUTDOWN: stop all services of the current deployment (across all units) in parallel.
 	d.stopUnits(req.Address, prevUnits)
 
-	// STARTUP: spawn services for every unit from the new worktree.
-	for _, u := range newUnits {
-		uAddr := unitAddress(req.Address, u.RelPath)
-		env := d.unitEnv(uAddr, req.Ref, req.NewSHA, newDir, u.Volumes)
-		for name, svc := range u.Services {
-			key := serviceKey(uAddr, name)
-			d.Sup.Spawn(key, supervisor.ServiceSpec{
-				Command: svc.Run,
-				WorkDir: newDir,
-				Env:     env,
-				LogFile: d.Paths.ServiceLog(key),
-			})
-		}
+	// STARTUP: spawn the services planned above from the new worktree.
+	for _, ps := range toSpawn {
+		d.Sup.Spawn(ps.key, ps.spec)
 	}
 
 	// VERIFY: observe services for VerifyWindow; any crash triggers rollback.
@@ -252,9 +280,13 @@ func (d *Deployer) rollback(
 		prevDir := filepath.Join(prevWorktree, req.Subdir)
 		for _, u := range prevUnits {
 			uAddr := unitAddress(req.Address, u.RelPath)
-			env := d.unitEnv(uAddr, req.Ref, req.PrevSHA, prevDir, u.Volumes)
 			for name, svc := range u.Services {
 				key := serviceKey(uAddr, name)
+				env, err := d.env(uAddr, req.PrevSHA, prevDir, req, u.Environment, svc.Environment, u.Volumes)
+				if err != nil {
+					slog.Error("rollback: env build failed", "service", key, "err", err)
+					continue
+				}
 				d.Sup.Spawn(key, supervisor.ServiceSpec{
 					Command: svc.Run,
 					WorkDir: prevDir,
@@ -336,22 +368,22 @@ func (d *Deployer) verify(units []config.InlineUnit, base string) error {
 	}
 }
 
-// unitEnv builds the environment for a unit's services: the host environment plus
-// NEXUS_* variables and the unit's volume paths (namespaced by the unit's address).
-func (d *Deployer) unitEnv(address, ref, sha, worktree string, volumes map[string]struct{}) []string {
-	env := append(os.Environ(),
-		"NEXUS_PROJECT="+address,
-		"NEXUS_SHA="+sha,
-		"NEXUS_REF="+ref,
-		"NEXUS_WORKTREE="+worktree,
-	)
-	for name := range volumes {
-		upper := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
-		volPath := d.Paths.VolumeDir(address, name)
-		_ = os.MkdirAll(volPath, 0o755)
-		env = append(env, "NEXUS_VOLUME_"+upper+"="+volPath)
-	}
-	return env
+// env builds the process environment for a unit's build or service commands via
+// the penv package: the host environment, NEXUS_* contract variables, the unit's
+// own and every project's volume paths, the app's .env, and the project- and
+// service-level environment: maps (svcEnv is nil for the build step).
+func (d *Deployer) env(uAddr, sha, workDir string, req Request, projEnv, svcEnv map[string]string, ownVols map[string]struct{}) ([]string, error) {
+	return penv.Build(penv.Input{
+		Paths:         d.Paths,
+		Address:       uAddr,
+		Ref:           req.Ref,
+		SHA:           sha,
+		WorkDir:       workDir,
+		OwnVolumes:    ownVols,
+		GlobalVolumes: req.GlobalVolumeEnv,
+		ProjectEnv:    projEnv,
+		ServiceEnv:    svcEnv,
+	})
 }
 
 // unitAddress joins a base address with a unit's relative alias chain.

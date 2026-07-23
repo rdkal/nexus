@@ -228,6 +228,10 @@ $NEXUS_HOME/                                         default: ~/.nexus
 │       └── api/
 │           └── uploads/                             volume "uploads" in the api project
 │
+├── env/                                             operator .env files, keyed by address
+│   ├── my-system.env                                host-specific config/secrets (not in git)
+│   └── traefik.env
+│
 └── logs/                                            keyed by full resource address
     └── my-system/
         ├── <sha>-build.log
@@ -243,8 +247,8 @@ $NEXUS_HOME/                                         default: ~/.nexus
 
 `repos/` is keyed by spec path so bare clones are shared across all projects with the same
 URL. `volumes/` and `logs/` are keyed by resource address starting from the root project
-name. Operationally: volumes are the only thing that must be backed up; repos and logs
-can be freely wiped and rebuilt.
+name. Operationally: `volumes/` and `env/` are what must be backed up (data and operator
+secrets/config); repos and logs can be freely wiped and rebuilt.
 
 ---
 
@@ -374,6 +378,40 @@ Key: service name. Unique within this deployment alongside volume names and proj
 | Field | Required | Description |
 |---|---|---|
 | `run` | yes | Shell command. Spawned with `sh -c`. Working directory is the directory containing the `nexus.yaml` (equals worktree root for single-repo projects; may be a subdirectory for monorepos) |
+| `environment` | no | Per-service environment variables (see below). Override the project-level `environment` for the same key |
+
+#### `environment` (map or list)
+
+Environment variables, docker-compose style. Set at the top level (applies to the build and
+every service) and/or per service (overrides the project value). Values may use `${VAR}`
+interpolation; a reference to a variable that is defined nowhere **fails the deploy** (before
+any old service is stopped) rather than silently expanding to empty — so a typo or a missing
+secret is caught, not shipped. Use `${VAR:-default}` to opt out (default when `VAR` is unset
+or empty; `${VAR-default}` only when unset), which never errors.
+
+Two `.env` files are loaded automatically: one next to the `nexus.yaml` (committed defaults),
+and `$NEXUS_HOME/env/<project>.env` — the operator's file, **not** in git and persistent
+across deploys. Put host-specific config and secrets there; it overrides the repo's values.
+
+```yaml
+environment:          # map form (or a "- KEY=value" list)
+  LOG_LEVEL: info
+services:
+  api:
+    environment:
+      ROUTES_DIR: ${NEXUS_TRAEFIK_DYNAMIC}/authelia   # reference another project's volume
+      TOKEN: ${CF_DNS_API_TOKEN}                      # forward one daemon variable, on purpose
+    run: ./api
+```
+
+Processes are isolated from each other: they inherit only `PATH`, `HOME` and a few
+essentials from the daemon — not its full environment — so a secret set for one project is
+never visible to another. A project gets only what it declares (plus the `NEXUS_*` contract).
+To hand a project a specific daemon variable, forward it by name: `TOKEN: ${CF_DNS_API_TOKEN}`
+(or the bare list form `- CF_DNS_API_TOKEN`).
+
+Precedence, low to high: essentials → repo `.env` → project `environment` → service
+`environment` → `$NEXUS_HOME/env/<project>.env` → `NEXUS_*` (which stay authoritative).
 
 ---
 
@@ -396,8 +434,14 @@ NEXUS_PROJECT=<project name, e.g. postgres>
 NEXUS_SHA=<full-commit-sha>
 NEXUS_REF=<branch-or-tag>
 NEXUS_WORKTREE=<absolute-path-to-this-worktree>
-NEXUS_VOLUME_<NAME>=<absolute-path>    # one per declared volume; resolves to $NEXUS_HOME/volumes/<resource-address>
+NEXUS_VOLUME_<NAME>=<absolute-path>            # this project's own volumes
+NEXUS_<PROJECT>_<VOLUME>=<absolute-path>       # every project's volumes, for cross-project wiring
 ```
+
+`NEXUS_<PROJECT>_<VOLUME>` (e.g. `NEXUS_TRAEFIK_DYNAMIC`) is injected for *every* deployed
+project's volumes, so one project can reference another's volume path without hardcoding it —
+map it to whatever variable a service reads via `environment:`. The provider must be deployed
+before the consumer for its variable to exist.
 
 ---
 
@@ -800,8 +844,7 @@ They are slower and intended to run in CI rather than on every save.
 - Flows / pipelines
 - TLS / authentication on the web UI
 - Inbound webhooks (polling only for now)
-- Secret management
-- Cross-deployment volume path injection (see Open Questions)
+- Encrypted secret store (per-project env via `environment:` and `$NEXUS_HOME/env` exists; encryption at rest does not)
 - Multi-machine execution
 - Windows support
 
@@ -811,11 +854,7 @@ They are slower and intended to run in CI rather than on every save.
 
 1. **`depends_on` / startup ordering**: not in v1. Services crash-loop until their
    dependencies are available — the process supervisor's exponential backoff handles this.
-   Explicit ordering and `bind:` wiring can be added later without breaking existing configs.
+   Explicit ordering can be added later without breaking existing configs.
 
-2. **Cross-deployment volume paths**: a service sometimes needs the volume path of another
-   project (e.g. api needs postgres's socket path). V1 services coordinate via well-known
-   host paths or out-of-band env vars. A future `bind:` mechanism could inject these paths.
-
-3. **`@latest` tie-breaking**: non-semver tag names that sort equally under `version:refname`
+2. **`@latest` tie-breaking**: non-semver tag names that sort equally under `version:refname`
    fall back to tag creation date. Decided — no further action needed.

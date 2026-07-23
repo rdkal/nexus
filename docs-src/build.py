@@ -44,6 +44,11 @@ build: go build -o server ./cmd/server
 volumes:
   data: {}
 
+# Environment variables (optional), docker-compose style. A .env next to
+# this file is loaded; host secrets go in ~/.nexus/env/<project>.env.
+environment:
+  LOG_LEVEL: info
+
 # Long-running processes nexus supervises (and restarts on crash).
 services:
   web:

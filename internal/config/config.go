@@ -11,15 +11,71 @@ import (
 
 // ProjectFile is the parsed content of a nexus.yaml.
 type ProjectFile struct {
-	Build    string                `yaml:"build"`
-	Volumes  map[string]struct{}   `yaml:"volumes"`
-	Services map[string]Service    `yaml:"services"`
-	Projects map[string]SubProject `yaml:"projects"`
+	Build       string                `yaml:"build"`
+	Environment Env                   `yaml:"environment"`
+	Volumes     map[string]struct{}   `yaml:"volumes"`
+	Services    map[string]Service    `yaml:"services"`
+	Projects    map[string]SubProject `yaml:"projects"`
 }
 
 // Service is a named long-running process.
 type Service struct {
-	Run string `yaml:"run"`
+	Run         string `yaml:"run"`
+	Environment Env    `yaml:"environment"`
+}
+
+// Env is a set of environment variables. It accepts both docker-compose forms:
+//
+//	environment:
+//	  KEY: value
+//	  PORT: 8080
+//
+//	environment:
+//	  - KEY=value
+//	  - PORT=8080
+//
+// Values are always strings (a bare number/bool is stringified).
+type Env map[string]string
+
+// UnmarshalYAML decodes the map form or the list ("KEY=value") form.
+func (e *Env) UnmarshalYAML(node *yaml.Node) error {
+	out := map[string]string{}
+	switch node.Kind {
+	case yaml.MappingNode:
+		var m map[string]any
+		if err := node.Decode(&m); err != nil {
+			return err
+		}
+		for k, v := range m {
+			if v == nil {
+				out[k] = ""
+			} else {
+				out[k] = fmt.Sprint(v)
+			}
+		}
+	case yaml.SequenceNode:
+		var list []string
+		if err := node.Decode(&list); err != nil {
+			return err
+		}
+		for _, item := range list {
+			k, v, ok := strings.Cut(item, "=")
+			k = strings.TrimSpace(k)
+			if k == "" {
+				continue
+			}
+			if ok {
+				out[k] = v
+			} else {
+				// A bare "KEY" (no =) forwards the daemon's value, docker-compose style.
+				out[k] = "${" + k + "}"
+			}
+		}
+	default:
+		return fmt.Errorf("environment must be a map or a list, got %v", node.Kind)
+	}
+	*e = out
+	return nil
 }
 
 // SubProject is an entry in the projects: map.
@@ -30,10 +86,11 @@ type SubProject struct {
 	Ref string `yaml:"ref"`
 
 	// Inline fields — ignored for external projects (they come from the remote nexus.yaml).
-	Build    string                `yaml:"build"`
-	Volumes  map[string]struct{}   `yaml:"volumes"`
-	Services map[string]Service    `yaml:"services"`
-	Projects map[string]SubProject `yaml:"projects"`
+	Build       string                `yaml:"build"`
+	Environment Env                   `yaml:"environment"`
+	Volumes     map[string]struct{}   `yaml:"volumes"`
+	Services    map[string]Service    `yaml:"services"`
+	Projects    map[string]SubProject `yaml:"projects"`
 }
 
 // IsExternal reports whether this sub-project references an external git repo.
@@ -92,10 +149,11 @@ func ParseBytes(data []byte) (*ProjectFile, error) {
 // one worktree. RelPath is the alias chain from the base project (nil = the base
 // project itself).
 type InlineUnit struct {
-	RelPath  []string
-	Build    string
-	Volumes  map[string]struct{}
-	Services map[string]Service
+	RelPath     []string
+	Build       string
+	Environment map[string]string
+	Volumes     map[string]struct{}
+	Services    map[string]Service
 }
 
 // ExternalRef is an external sub-project (has src:) discovered while flattening an
@@ -113,9 +171,10 @@ type ExternalRef struct {
 // their joined RelPath for deterministic ordering; the base unit sorts first.
 func (f *ProjectFile) Flatten() (units []InlineUnit, external []ExternalRef) {
 	units = append(units, InlineUnit{
-		Build:    f.Build,
-		Volumes:  f.Volumes,
-		Services: f.Services,
+		Build:       f.Build,
+		Environment: f.Environment,
+		Volumes:     f.Volumes,
+		Services:    f.Services,
 	})
 	flattenProjects(f.Projects, nil, &units, &external)
 
@@ -136,10 +195,11 @@ func flattenProjects(projects map[string]SubProject, prefix []string, units *[]I
 			continue
 		}
 		*units = append(*units, InlineUnit{
-			RelPath:  rel,
-			Build:    sub.Build,
-			Volumes:  sub.Volumes,
-			Services: sub.Services,
+			RelPath:     rel,
+			Build:       sub.Build,
+			Environment: sub.Environment,
+			Volumes:     sub.Volumes,
+			Services:    sub.Services,
 		})
 		flattenProjects(sub.Projects, rel, units, external)
 	}
