@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS projects (
     spec_path   TEXT NOT NULL,
     ref         TEXT NOT NULL DEFAULT '@main',
     current_sha TEXT,
-    subdir      TEXT NOT NULL DEFAULT ''
+    subdir      TEXT NOT NULL DEFAULT '',
+    stopped     INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS deployments (
@@ -84,6 +85,7 @@ func Open(path string) (*DB, error) {
 func migrate(conn *sql.DB) error {
 	steps := []string{
 		`ALTER TABLE projects ADD COLUMN subdir TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE projects ADD COLUMN stopped INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, stmt := range steps {
 		if _, err := conn.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -103,6 +105,7 @@ type Project struct {
 	Ref        string
 	CurrentSHA string // empty until first successful deployment
 	Subdir     string // in-repo path to the app's nexus.yaml ("" = repo root)
+	Stopped    bool   // paused for maintenance: kept tracked, but not deployed/running
 }
 
 // AddProject inserts a new project. Returns an error if the name is already in use.
@@ -133,7 +136,7 @@ func (d *DB) RemoveProject(name string) error {
 // ListProjects returns all tracked root projects ordered by name.
 func (d *DB) ListProjects() ([]Project, error) {
 	rows, err := d.conn.Query(
-		`SELECT name, spec_path, ref, COALESCE(current_sha, ''), subdir FROM projects ORDER BY name`,
+		`SELECT name, spec_path, ref, COALESCE(current_sha, ''), subdir, stopped FROM projects ORDER BY name`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)
@@ -143,9 +146,11 @@ func (d *DB) ListProjects() ([]Project, error) {
 	var out []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.Name, &p.SpecPath, &p.Ref, &p.CurrentSHA, &p.Subdir); err != nil {
+		var stopped int
+		if err := rows.Scan(&p.Name, &p.SpecPath, &p.Ref, &p.CurrentSHA, &p.Subdir, &stopped); err != nil {
 			return nil, err
 		}
+		p.Stopped = stopped != 0
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -183,13 +188,37 @@ func (d *DB) FinishDeployment(id int64, status string, finishedAt time.Time) err
 // GetProject returns a single project by name.
 func (d *DB) GetProject(name string) (Project, error) {
 	row := d.conn.QueryRow(
-		`SELECT name, spec_path, ref, COALESCE(current_sha, ''), subdir FROM projects WHERE name = ?`, name,
+		`SELECT name, spec_path, ref, COALESCE(current_sha, ''), subdir, stopped FROM projects WHERE name = ?`, name,
 	)
 	var p Project
-	if err := row.Scan(&p.Name, &p.SpecPath, &p.Ref, &p.CurrentSHA, &p.Subdir); err != nil {
+	var stopped int
+	if err := row.Scan(&p.Name, &p.SpecPath, &p.Ref, &p.CurrentSHA, &p.Subdir, &stopped); err != nil {
 		return Project{}, fmt.Errorf("get project %q: %w", name, err)
 	}
+	p.Stopped = stopped != 0
 	return p, nil
+}
+
+// SetStopped marks a project paused (stopped=true) or resumed (stopped=false).
+// The project's row and current SHA are untouched, so a paused project stays down
+// across daemon restarts until resumed, then recovers from its last SHA.
+func (d *DB) SetStopped(name string, stopped bool) error {
+	res, err := d.conn.Exec(`UPDATE projects SET stopped = ? WHERE name = ?`, boolToInt(stopped), name)
+	if err != nil {
+		return fmt.Errorf("set stopped for %q: %w", name, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("project %q not found", name)
+	}
+	return nil
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // Deployment is a record of one deploy attempt for a project.

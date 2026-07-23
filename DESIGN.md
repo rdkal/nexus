@@ -44,12 +44,20 @@ path segment):
 ```sh
 nexus project add github.com/myorg/system-a
 nexus project add github.com/myorg/system-a:my-custom-name
+nexus project stop my-system      # pause for maintenance (stays tracked)
+nexus project start my-system     # resume from the last deployed SHA
 nexus project remove my-system
 ```
 
-`add` and `remove` take effect immediately: the CLI writes the project to the database and
-notifies the running daemon (`POST /projects` on the socket), which reconciles live — it
-starts the newly-added root project and stops removed ones without a restart.
+`add`, `remove`, `stop`, and `start` take effect immediately: the CLI updates the database
+and notifies the running daemon (`POST /projects` on the socket), which reconciles live —
+starting and stopping root projects without a restart.
+
+`stop` pauses a project for a maintenance window: its services (and any nested sub-projects,
+recursively) are stopped, but its row and current SHA stay in the database, so it remains
+stopped across a daemon restart until `start` resumes it — recovering from the same SHA
+rather than a fresh re-add. This is distinct from `remove`, which forgets the project
+entirely.
 
 The installer adds `$NEXUS_HOME/bin` to `PATH` (idempotently, via `~/.profile`, `~/.bashrc`,
 and `~/.zshrc`) so the `nexus` command is found in new shells; it also prints the one-line

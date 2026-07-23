@@ -274,6 +274,16 @@ class NexusFixture:
         """Register a project in the DB before the daemon starts."""
         _add_project_to_db(self.db_path, name, spec_path, ref, subdir)
 
+    def cli(self, *args: str) -> subprocess.CompletedProcess:
+        """Run the nexus CLI against this instance's NEXUS_HOME."""
+        return subprocess.run(
+            [str(self._bin_dir / "nexus"), *args],
+            env=self._env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
     def start(self, poll_interval: str = "2s", extra_env: dict | None = None):
         """Start nexus-pm, which auto-starts the nexus daemon."""
         env = dict(self._env)

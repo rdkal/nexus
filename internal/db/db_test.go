@@ -249,3 +249,48 @@ func TestMigrate_AddsSubdirColumn(t *testing.T) {
 		t.Errorf("Subdir = %q, want services/api", got2.Subdir)
 	}
 }
+
+func TestSetStopped(t *testing.T) {
+	d := openDB(t)
+	p := db.Project{Name: "app", SpecPath: "github.com/x/app", Ref: "main"}
+	if err := d.AddProject(p); err != nil {
+		t.Fatalf("AddProject: %v", err)
+	}
+
+	// Fresh projects are not stopped.
+	got, err := d.GetProject("app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Stopped {
+		t.Error("new project should not be stopped")
+	}
+
+	if err := d.SetStopped("app", true); err != nil {
+		t.Fatalf("SetStopped(true): %v", err)
+	}
+	got, _ = d.GetProject("app")
+	if !got.Stopped {
+		t.Error("project should be stopped after SetStopped(true)")
+	}
+	// ListProjects reflects it too.
+	list, _ := d.ListProjects()
+	if len(list) != 1 || !list[0].Stopped {
+		t.Errorf("ListProjects stopped flag not set: %+v", list)
+	}
+
+	if err := d.SetStopped("app", false); err != nil {
+		t.Fatalf("SetStopped(false): %v", err)
+	}
+	got, _ = d.GetProject("app")
+	if got.Stopped {
+		t.Error("project should be resumed after SetStopped(false)")
+	}
+}
+
+func TestSetStoppedNonexistent(t *testing.T) {
+	d := openDB(t)
+	if err := d.SetStopped("nope", true); err == nil {
+		t.Error("expected error for unknown project")
+	}
+}

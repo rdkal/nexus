@@ -29,6 +29,7 @@
 | Custom project name via `spec-path:name` syntax | ✅ | ✅ | ✅ |
 | `nexus project add <spec-path[:name]>` CLI command | ✅ | ✅ | |
 | `nexus project remove <name>` CLI command | ✅ | ✅ | |
+| `nexus project stop`/`start <name>` — pause/resume a project tree for maintenance; persisted (`stopped` column), survives daemon restart | ✅ | ✅ | ✅ |
 | `projects:` string shorthand — `<spec>@<ref>` (or bare `<spec>`) as an alternative to the `{src, ref}` map | ✅ | ✅ | ✅ |
 | Drop the mandatory `@` ref prefix — bare refs (`main`, `v15`, `latest`, `web-v*`); `@` only as the `spec@ref` separator | ✅ | ✅ | ✅ |
 | **Git layer** |
