@@ -495,6 +495,13 @@ git ls-remote --tags --sort=-version:refname origin 'refs/tags/web-v*'
 
 When the resolved SHA differs from the last recorded SHA, a new deployment is enqueued.
 
+**Retry on failure**: a failed deploy is retried with exponential backoff (1s, 2s, 4s …
+capped at 60s) rather than waiting for a new commit, so a transient failure — a flaky clone,
+a build dependency briefly unavailable, or a self-update racing the release workflow's binary
+upload — self-heals. It never gives up: a persistently-failing SHA retries at the cap until
+it succeeds or a newer commit supersedes it (a new SHA arriving during backoff cancels the
+retry).
+
 **Independent polling**: each external project polls its own ref independently and is only
 redeployed when its own ref changes. Inline projects have no ref and are always redeployed
 together with their parent.

@@ -47,3 +47,23 @@ func (q *Queue) WaitPop(ctx context.Context) (string, bool) {
 		}
 	}
 }
+
+// WaitPopTimeout is WaitPop bounded by d: it returns ("", false) when d elapses
+// (or ctx is cancelled) with nothing pending. Callers distinguish the two via
+// ctx.Err(). Used to wait for a superseding SHA while a failed deploy backs off.
+func (q *Queue) WaitPopTimeout(ctx context.Context, d time.Duration) (string, bool) {
+	deadline := time.NewTimer(d)
+	defer deadline.Stop()
+	for {
+		if sha, ok := q.Pop(); ok {
+			return sha, true
+		}
+		select {
+		case <-ctx.Done():
+			return "", false
+		case <-deadline.C:
+			return "", false
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
