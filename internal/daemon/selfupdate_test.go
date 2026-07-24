@@ -70,10 +70,35 @@ func TestNew_SelfSpecPath(t *testing.T) {
 	}
 }
 
+func TestSpecKey(t *testing.T) {
+	const want = "github.com/rdkal/nexus"
+	for _, in := range []string{
+		"github.com/rdkal/nexus",
+		"https://github.com/rdkal/nexus",
+		"https://github.com/rdkal/nexus.git",
+		"git@github.com:rdkal/nexus",
+		"git@github.com:rdkal/nexus.git",
+		"ssh://git@github.com/rdkal/nexus",
+	} {
+		if got := specKey(in); got != want {
+			t.Errorf("specKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestIsSelf(t *testing.T) {
 	d := &Daemon{SelfSpecPath: "github.com/rdkal/nexus"}
 	if !d.isSelf("github.com/rdkal/nexus", "") {
 		t.Error("expected match for the configured self spec path")
+	}
+	// The stored specPath is the RESOLVED clone URL (add-time transport
+	// resolution), while SelfSpecPath is bare — both must still match, else
+	// self-update never restarts the runtime (#61).
+	if !d.isSelf("https://github.com/rdkal/nexus", "") {
+		t.Error("resolved https clone URL of nexus's own repo should be self")
+	}
+	if !d.isSelf("git@github.com:rdkal/nexus", "") {
+		t.Error("resolved ssh clone URL of nexus's own repo should be self")
 	}
 	if d.isSelf("github.com/other/repo", "") {
 		t.Error("unexpected match for a different spec path")

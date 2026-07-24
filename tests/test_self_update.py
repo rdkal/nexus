@@ -19,6 +19,14 @@ import time
 
 from conftest import GitRepo
 
+
+def _runtime_starts(nexus) -> int:
+    """How many times the nexus runtime has started (one line per process start)."""
+    log = nexus.home / "logs" / "nexus-runtime" / "current.log"
+    if not log.exists():
+        return 0
+    return log.read_text(errors="replace").count("nexus daemon starting")
+
 USER_YAML = """\
 services:
   web:
@@ -51,7 +59,11 @@ def test_self_update_keeps_user_services_running(nexus, tmp_path):
     nexus.start(
         poll_interval="2s",
         extra_env={
-            "NEXUS_SELF_SPEC": selfrepo.spec_path,
+            # Deliberately scheme-less, while the project's stored spec_path is the
+            # resolved file:// clone URL — so isSelf must match across transport
+            # forms. (Real installs store https://… but compare against the bare
+            # spec path; this is the #61 mismatch in fixture form.)
+            "NEXUS_SELF_SPEC": str(selfrepo.bare),
             "NEXUS_SELFTEST_BIN": str(nexus.nexus_source),
         },
     )
@@ -73,6 +85,8 @@ def test_self_update_keeps_user_services_running(nexus, tmp_path):
         time.sleep(0.5)
     assert pid_before, "user service never reported a PID"
 
+    starts_before = _runtime_starts(nexus)
+
     # Push a new commit to the self repo → self-update: build swaps the binary,
     # deploy promotes, daemon asks nexus-pm to restart the runtime.
     self_sha2 = selfrepo.commit(
@@ -82,6 +96,17 @@ def test_self_update_keeps_user_services_running(nexus, tmp_path):
 
     # After the runtime restart the new nexus recovers state and reports sha2.
     nexus.wait_for_project_sha("nexus-self", self_sha2)
+
+    # The RUNNING runtime must actually restart onto the new binary — promoting
+    # sha2 alone is not self-update (#61: isSelf never matched, so the process
+    # was never reloaded). Each runtime start logs "nexus daemon starting".
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline and _runtime_starts(nexus) <= starts_before:
+        time.sleep(0.5)
+    assert _runtime_starts(nexus) > starts_before, (
+        f"nexus runtime did not restart on self-update "
+        f"(daemon-start count stayed at {starts_before})"
+    )
 
     # The user service must have survived with the SAME PID — nexus-pm owns it and
     # never restarted it across the nexus runtime swap.

@@ -569,8 +569,33 @@ func (d *Daemon) stopProjectState(ps *projectState) {
 // repository AND it deploys the whole repo (no subdir). A subdirectory project of
 // the nexus repo — e.g. the web UI at github.com/rdkal/nexus/web — shares the repo
 // root spec path but is not nexus, so it must not trigger a runtime restart.
+//
+// The stored specPath is the *resolved* clone URL (e.g. https://github.com/rdkal/nexus
+// or git@github.com:rdkal/nexus), while SelfSpecPath is the bare spec path, so both
+// sides are reduced to a transport-independent key before comparing — otherwise
+// self-update never matches and the running runtime is never restarted.
 func (d *Daemon) isSelf(specPath, subdir string) bool {
-	return d.SelfSpecPath != "" && specPath == d.SelfSpecPath && subdir == ""
+	return d.SelfSpecPath != "" && subdir == "" && specKey(specPath) == specKey(d.SelfSpecPath)
+}
+
+// specKey reduces a spec path or clone URL to a transport-independent host/path
+// key: "https://github.com/x/y", "git@github.com:x/y", "ssh://git@github.com/x/y",
+// and a bare "github.com/x/y" all map to "github.com/x/y".
+func specKey(s string) string {
+	if i := strings.Index(s, "://"); i >= 0 {
+		s = s[i+3:] // drop scheme://
+	}
+	if i := strings.LastIndex(s, "@"); i >= 0 {
+		s = s[i+1:] // drop any user@ (e.g. git@)
+	}
+	s = strings.TrimSuffix(s, ".git")
+	// scp-like "host:path" (a ':' with no '/' before it, not followed by a port) → "host/path".
+	if c := strings.IndexByte(s, ':'); c >= 0 && !strings.Contains(s[:c], "/") {
+		if c+1 >= len(s) || s[c+1] < '0' || s[c+1] > '9' {
+			s = s[:c] + "/" + s[c+1:]
+		}
+	}
+	return strings.Trim(s, "/")
 }
 
 // restartRuntime asks nexus-pm to restart the nexus runtime onto the newly built
