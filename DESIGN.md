@@ -415,6 +415,10 @@ projects:
       TRAEFIK_DYNAMIC_DIR: ${NEXUS_RETU_TRAEFIK_DYNAMIC}   # remap for the nested address
 ```
 
+Changing a nested project's parent-supplied config (its `environment:`, `ref`, or `src`)
+and redeploying the parent rebuilds that child with the new values — it does not wait for
+the child's own repo to move to a new commit.
+
 ```yaml
 environment:          # map form (or a "- KEY=value" list)
   LOG_LEVEL: info
