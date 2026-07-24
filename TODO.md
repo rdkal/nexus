@@ -103,6 +103,7 @@
 | `nexus.yaml` self-tracking config (build-only, no services) | ✅ | ✅ | ✅ |
 | After self-build deploy, call `POST /runtime/restart` on nexus-pm.sock | ✅ | ✅ | ✅ |
 | Self-identification via spec path (NEXUS_SELF_SPEC override) | ✅ | ✅ | ✅ |
+| Self-identification is transport-independent (resolved clone URL vs bare spec) — else the runtime never restarts | ✅ | ✅ | ✅ |
 | Self-identification excludes subdir projects (web UI at `…/nexus/web` ≠ self) | ✅ | ✅ | ✅ |
 | **Web UI (Python / iris)** |
 | `nexus-web` lives in-repo at `web/`; added via `nexus project add github.com/rdkal/nexus/web` | ✅ | ✅ | ✅ |

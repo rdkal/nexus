@@ -627,6 +627,10 @@ No launcher script. No "skip STARTUP" special case. No state handshake between o
 repository (`github.com/rdkal/nexus`). This is overridable with `NEXUS_SELF_SPEC` for forks,
 and setting it empty disables self-update restarts entirely. Only a project matching this
 spec path triggers a runtime restart after deploying; every other project deploys normally.
+The match is **transport-independent**: the stored spec path is the resolved clone URL
+(`https://github.com/rdkal/nexus`, `git@github.com:rdkal/nexus`, …), so both sides are reduced
+to a bare `host/path` key before comparing — otherwise self-update would silently never
+restart the running runtime.
 
 **Surviving the restart**: because the restart deliberately interrupts the runtime, two
 properties keep the system consistent. The database is opened in WAL mode with a
