@@ -502,6 +502,13 @@ upload — self-heals. It never gives up: a persistently-failing SHA retries at 
 it succeeds or a newer commit supersedes it (a new SHA arriving during backoff cancels the
 retry).
 
+**Recovery ordering**: on daemon restart, projects recover in a deterministic (alias) order,
+which does not necessarily match cross-project dependencies. A service whose `environment:`
+references a sibling's `NEXUS_<PROJECT>_<VOLUME>` var may therefore be skipped if that provider
+has not recovered yet. Once every project has recovered — so all cross-project volume vars
+exist — the daemon re-spawns any service that was skipped; one that still cannot resolve its
+environment is logged as an error rather than left silently unspawned.
+
 **Independent polling**: each external project polls its own ref independently and is only
 redeployed when its own ref changes. Inline projects have no ref and are always redeployed
 together with their parent.
