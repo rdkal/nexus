@@ -70,6 +70,7 @@
 | Sub-project SHA tracking via deployments table (not projects table) | ✅ | ✅ | ✅ |
 | Sub-project teardown when removed from parent config | ✅ | ✅ | ✅ |
 | Recursive recovery of sub-projects on daemon restart | ✅ | ✅ | |
+| Recovery re-spawns services skipped due to cross-project env not-yet-available (deterministic alias order + retry pass); surfaces still-unresolved loudly | ✅ | ✅ | ✅ |
 | Inline sub-project deploy (shares parent worktree, atomic with parent) | ✅ | ✅ | ✅ |
 | Config flatten-to-units (inline subtree + external refs) | ✅ | ✅ | ✅ |
 | External sub-projects nested inside inline projects | ✅ | ✅ | |

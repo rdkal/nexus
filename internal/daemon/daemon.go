@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -80,12 +81,13 @@ type projectState struct {
 	queue  *poller.Queue
 	cancel context.CancelFunc
 
-	mu       sync.RWMutex
-	sha      string                            // current deployed SHA
-	cfg      *config.ProjectFile               // current deployed config (nil = not deployed)
-	worktree string                            // current deployed worktree path
-	svcSpecs map[string]supervisor.ServiceSpec // keyed by service name
-	children map[string]*projectState          // external sub-projects, keyed by alias
+	mu                 sync.RWMutex
+	sha                string                            // current deployed SHA
+	cfg                *config.ProjectFile               // current deployed config (nil = not deployed)
+	worktree           string                            // current deployed worktree path
+	svcSpecs           map[string]supervisor.ServiceSpec // keyed by service name
+	children           map[string]*projectState          // external sub-projects, keyed by alias
+	recoveryIncomplete bool                              // a service was skipped on recovery (env unresolved)
 }
 
 // New creates a Daemon ready to be started with Run.
@@ -121,6 +123,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 			slog.Error("daemon: failed to start project", "address", p.Name, "err", err)
 		}
 	}
+	// Recovery above walks projects in arbitrary order, so a service referencing a
+	// sibling's cross-project volume var may have been skipped. Now that every
+	// project is recovered, re-spawn any that were skipped.
+	d.retryIncompleteRecoveries()
 	return d.serve(ctx)
 }
 
@@ -235,22 +241,101 @@ func (d *Daemon) recoverProject(ctx context.Context, ps *projectState) {
 		return
 	}
 
-	// Recover every service, including those of inline sub-projects, by re-spawning
-	// from the flattened config. Spawn is a no-op for services nexus-pm still runs.
-	specs := d.flattenedSpecs(ps.address, ps.ref, sha, appDir, cfg, ps.parentEnv)
-	for relName, spec := range specs {
-		d.Sup.Spawn(serviceKey(ps.address, relName), spec)
-	}
-
 	ps.mu.Lock()
 	ps.sha = sha
 	ps.cfg = cfg
 	ps.worktree = worktree
-	ps.svcSpecs = specs
 	ps.mu.Unlock()
+
+	// Re-spawn services from the flattened config. A service whose environment
+	// references a sibling project's volume var may be skipped if that provider
+	// hasn't recovered yet (recovery order is arbitrary); such a project is flagged
+	// so retryIncompleteRecoveries re-spawns it once everything is up.
+	d.spawnRecoveredServices(ps)
 	slog.Info("daemon: recovered project", "address", ps.address, "sha", sha)
 
 	d.reconcileChildren(ctx, ps, cfg)
+}
+
+// spawnRecoveredServices (re-)spawns the services of an already-recovered project
+// from its flattened config, and records whether any service was skipped because
+// its environment could not be resolved yet.
+func (d *Daemon) spawnRecoveredServices(ps *projectState) {
+	ps.mu.RLock()
+	cfg, sha, worktree, parentEnv := ps.cfg, ps.sha, ps.worktree, ps.parentEnv
+	ps.mu.RUnlock()
+	if cfg == nil {
+		return
+	}
+	appDir := filepath.Join(worktree, ps.subdir)
+	specs := d.flattenedSpecs(ps.address, ps.ref, sha, appDir, cfg, parentEnv)
+	for relName, spec := range specs {
+		d.Sup.Spawn(serviceKey(ps.address, relName), spec)
+	}
+	ps.mu.Lock()
+	ps.svcSpecs = specs
+	ps.recoveryIncomplete = len(specs) < countServices(cfg)
+	ps.mu.Unlock()
+}
+
+// countServices totals the services across a project and its inline sub-projects.
+func countServices(cfg *config.ProjectFile) int {
+	units, _ := cfg.Flatten()
+	n := 0
+	for _, u := range units {
+		n += len(u.Services)
+	}
+	return n
+}
+
+// retryIncompleteRecoveries re-spawns services that were skipped during recovery
+// because a sibling project they reference (via a NEXUS_<PROJECT>_<VOLUME> var)
+// had not recovered yet. Called once the initial recovery pass has walked every
+// project, so all cross-project volume vars are now available. Loops for
+// dependency chains; anything still unresolved is surfaced as an error rather
+// than left silently unspawned.
+func (d *Daemon) retryIncompleteRecoveries() {
+	for round := 0; round < 5; round++ {
+		d.mu.RLock()
+		var pending []*projectState
+		for _, ps := range d.projects {
+			ps.mu.RLock()
+			inc := ps.recoveryIncomplete
+			ps.mu.RUnlock()
+			if inc {
+				pending = append(pending, ps)
+			}
+		}
+		d.mu.RUnlock()
+		if len(pending) == 0 {
+			return
+		}
+		progressed := false
+		for _, ps := range pending {
+			d.spawnRecoveredServices(ps)
+			ps.mu.RLock()
+			inc := ps.recoveryIncomplete
+			ps.mu.RUnlock()
+			if !inc {
+				progressed = true
+				slog.Info("daemon: recovered previously-skipped services", "address", ps.address)
+			}
+		}
+		if !progressed {
+			break
+		}
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	for _, ps := range d.projects {
+		ps.mu.RLock()
+		inc, addr := ps.recoveryIncomplete, ps.address
+		ps.mu.RUnlock()
+		if inc {
+			slog.Error("daemon: recovery incomplete — a service could not resolve its environment "+
+				"(check its environment: references); it is NOT running", "address", addr)
+		}
+	}
 }
 
 // runPoller runs the git polling loop for a project.
@@ -395,6 +480,13 @@ func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 	}
 }
 
+// sortExternalRefs orders refs by their alias path for deterministic startup.
+func sortExternalRefs(refs []config.ExternalRef) {
+	sort.Slice(refs, func(i, j int) bool {
+		return strings.Join(refs[i].RelPath, "/") < strings.Join(refs[j].RelPath, "/")
+	})
+}
+
 // reconcileChildren starts external sub-projects newly declared in cfg and stops
 // those that have been removed. External sub-projects nested inside inline
 // projects are discovered via Flatten and keyed by their relative address (the
@@ -436,6 +528,11 @@ func (d *Daemon) reconcileChildren(ctx context.Context, ps *projectState, cfg *c
 		}
 	}
 	ps.mu.Unlock()
+
+	// Start children in a deterministic (alias) order rather than random map order,
+	// so recovery/startup behaviour is reproducible.
+	sortExternalRefs(toStart)
+	sortExternalRefs(toRestart)
 
 	for _, child := range toStop {
 		slog.Info("daemon: stopping sub-project", "address", child.address)
