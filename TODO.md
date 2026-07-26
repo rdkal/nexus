@@ -81,6 +81,20 @@
 | Restart on unexpected exit with exponential backoff (1s → 2s → 4s … cap 60s) | ✅ | ✅ | ✅ |
 | Degraded state: >5 crashes in 60s → stop restarting, alert | ✅ | ✅ | ✅ |
 | Service log capture to `logs/<address>/<service>/current.log` | ✅ | ✅ | ✅ |
+| **Tasks (scheduled & triggered)** — one-shot commands; the trigger is the primitive, pipelines emerge from `after:` edges (see DESIGN "Tasks") |
+| `tasks:` config field — one-shot `run`, in the deployed worktree with service env/volumes | ✅ | | |
+| `schedule:` trigger — cron expression + `@every`/`@daily` shorthand, evaluated in UTC; missed fires skipped (no backfill) | ✅ | | |
+| `after: <task>` trigger — run when the named sibling task exits 0; chain stops on failure | ✅ | | |
+| Manual trigger — `nexus task run <project>/<task>`, cascades to `after:` dependents | ✅ | | |
+| One-shot execution under nexus-pm (supervised + log-captured, NOT restarted) — new nexus-pm oneshot spawn mode | ✅ | | |
+| No self-overlap — skip a fire while the task's previous run is still active | ✅ | | |
+| `task_runs` table — per-run trigger reason (`schedule`/`after:X`/`manual`), start/finish, exit, log | ✅ | | |
+| Validate `after:` graph at deploy time — unknown task or cycle is a deploy error | ✅ | | |
+| **Tasks — designed soon** (specced later; core ships single-parent/on-success first) |
+| Fan-in / joins — `after: [a, b]` (both succeed), incl. run-correlation | | | |
+| Failure-mode design — retry-with-policy on a failed task, `on_failure:` triggering a different task, `on: always` edges | | | |
+| Cross-project task triggers (a task in one project triggering one in another) | | | |
+| Web UI for tasks — task graph, per-task run history, last status / next fire, manual-run button | | | |
 | **Volumes** |
 | Volume directory creation at `volumes/<address>/` on first use | ✅ | ✅ | |
 | **State persistence** |

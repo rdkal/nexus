@@ -388,6 +388,22 @@ Key: service name. Unique within this deployment alongside volume names and proj
 | `run` | yes | Shell command. Spawned with `sh -c`. Working directory is the directory containing the `nexus.yaml` (equals worktree root for single-repo projects; may be a subdirectory for monorepos) |
 | `environment` | no | Per-service environment variables (see below). Override the project-level `environment` for the same key |
 
+#### `tasks` (map)
+
+Key: task name. Unique within this deployment alongside service, volume, and project-alias
+names. A task is a **one-shot** command (see [Tasks](#tasks-scheduled--triggered)), distinct
+from a long-running `service`.
+
+| Field | Required | Description |
+|---|---|---|
+| `run` | yes | Shell command. Same execution context as a service `run` (worktree, `environment`, volumes, `NEXUS_*`) |
+| `schedule` | no | Cron expression (`0 3 * * *`) or shorthand (`@every 15m`, `@daily`) — a **time** trigger |
+| `after` | no | Name of another task in this deployment — an **event** trigger: run when that task succeeds |
+| `environment` | no | Per-task environment variables, same rules as a service's |
+
+A task declares at most one trigger (`schedule` **or** `after`); with neither it runs only when
+triggered manually (`nexus task run <task>`).
+
 #### `environment` (map or list)
 
 Environment variables, docker-compose style. Set at the top level (applies to the build and
@@ -585,6 +601,87 @@ at boot and restarts it on crash, just like any user service.
 - On unexpected exit: restart with exponential backoff — 1s, 2s, 4s … cap 60s
 - More than 5 crashes in 60 seconds → service marked `degraded`, no further auto-restart, UI alert
 - During planned SHUTDOWN: SIGTERM, then SIGKILL after grace period (default 30s)
+
+---
+
+## Tasks (scheduled & triggered)
+
+A **task** is nexus's second execution primitive, alongside the service. Where a service is a
+long-running process kept alive, a task is a **one-shot command** that runs *at times* or *in
+response to another task*, and whose **exit 0 means success**. Tasks run in the same context as
+services — the deployed worktree, the same `environment`, volumes, and `NEXUS_*` variables — so
+anything a service can do, a task can do.
+
+The key design decision is that there is **no separate "flow" or "pipeline" object**. The
+trigger is the primitive, and a pipeline is simply the graph of tasks pointing at one another:
+
+```yaml
+tasks:
+  fetch:
+    schedule: "0 2 * * *"     # time trigger — nightly at 02:00
+    run: ./fetch.sh
+  transform:
+    after: fetch              # event trigger — runs when fetch succeeds
+    run: ./transform.sh
+  publish:
+    after: transform
+    run: ./publish.sh
+  notify:
+    after: fetch              # fan-out — also runs after fetch
+    run: ./notify.sh
+```
+
+`fetch → transform → publish` is a pipeline; `fetch → {transform, notify}` is fan-out. The
+graph *is* the set of `after:` edges — no DAG language, the same composition-over-abstraction
+that nexus already applies to projects.
+
+**Triggers.** A task fires from exactly one of:
+
+- **`schedule:`** — a cron expression or `@every`/`@daily`-style shorthand. Schedules are
+  evaluated in UTC. Missed fires while the daemon was down are **skipped**, not backfilled.
+- **`after: <task>`** — the named sibling task **completing successfully**. If the upstream task
+  fails (non-zero exit), its `after:` dependents do **not** run — a chain stops on failure.
+- **neither** — the task runs only when triggered manually.
+
+**Manual trigger.** `nexus task run <project>/<task>` runs a task now and cascades to its
+`after:` dependents, for testing and ad-hoc runs.
+
+**Execution & recording.** A task fire is a one-shot run in the current deployment's worktree.
+Runs never overlap themselves: if a task is still running when its next trigger arrives, that
+fire is skipped. Each run is recorded (in a `task_runs` table) with its **trigger reason**
+(`schedule`, `after:<task>`, or `manual`), start/finish, exit status, and captured log —
+surfaced in the web UI as the task graph and its run history.
+
+**Validation.** The `after:` graph is checked at deploy time: an `after:` referencing an unknown
+task, or a cycle (`a after b`, `b after a`), is a deploy error — the same fail-loud posture as an
+undefined `${VAR}`.
+
+**Process ownership** follows the three-process split (see Self-Update): the `nexus` runtime owns
+the *scheduling* (computing the next fire and reacting to completions), while the task command is
+run as a **one-shot** unit under `nexus-pm` — supervised and log-captured like a service, but
+**not** restarted on exit, so a runtime restart never orphans a running task.
+
+### Designed soon
+
+These are intended extensions of the task model, deliberately left out of the first cut so the
+core (single-parent `after:`, on-success, one project) ships small:
+
+- **Fan-in / joins** — `after: [a, b]` meaning *when both succeed*. Needs run-correlation
+  (which run of `a` pairs with which run of `b`), which is the genuinely hard part; single-parent
+  chains and fan-out come first.
+- **Failure-mode triggers** — reacting to *failure*, not just success: retry-with-policy on a
+  failed task, an `on_failure:` edge that triggers a different task (alerting, compensation,
+  cleanup), and `on: always` edges that run regardless of outcome. This is a whole design of its
+  own (retry counts/backoff, what "the chain" means once failures branch it) and is specced
+  separately.
+- **Cross-project triggers** — a task in one project triggering a task in another, the way
+  cross-project volume variables already cross the project boundary.
+- **Web UI for tasks** — the task graph, per-task run history, last-run status/next-fire time,
+  and a manual-run button, added to nexus-web.
+
+The heavier, fully general version of all of this — conditional edges, approvals, cross-project
+orchestration — remains the deferred **Flows / pipelines** item; tasks-with-triggers is the
+composable core it would build on.
 
 ---
 
@@ -885,8 +982,11 @@ They are slower and intended to run in CI rather than on every save.
 - Python/iris web UI as a supervised nexus service (port 7777)
 - REST API served by the Python process
 
+**Not yet implemented, designed:**
+- Tasks (scheduled & triggered) — see the [Tasks](#tasks-scheduled--triggered) section
+
 **Explicitly deferred:**
-- Flows / pipelines
+- Flows / pipelines — the fully general version of tasks (fan-in joins, failure-mode/conditional edges, cross-project triggers, approvals); tasks-with-triggers is the composable core it builds on
 - TLS / authentication on the web UI
 - Inbound webhooks (polling only for now)
 - Encrypted secret store (per-project env via `environment:` and `$NEXUS_HOME/env` exists; encryption at rest does not)
