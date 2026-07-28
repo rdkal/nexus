@@ -104,9 +104,12 @@ essentials < repo .env < project env < service env
 CLI = """\
 nexus project add <spec>[:name] [--ref <ref>]   register a project, deploy it now
 nexus project list                              projects with their SHA and status
-nexus project stop <name>                       pause: stop services, stay tracked
-nexus project start <name>                      resume from the last deployed SHA
-nexus project remove <name>                     forget a project (stops it too)
+nexus project stop <name|address>               pause: stop services, stay tracked
+                                                 (a root name or a nested address, e.g. retu/ingest)
+nexus project start <name|address>              resume from the last deployed SHA
+nexus project remove <name>                     forget a root project (stops it too)
+nexus service stop <address> <service>          pause one service inside a project
+nexus service start <address> <service>         resume a paused service
 nexus version                                   print the installed version
 """
 

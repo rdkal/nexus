@@ -103,6 +103,7 @@ func rootCmd() *cobra.Command {
 
 	root.AddCommand(daemonCmd(&homeFlag))
 	root.AddCommand(projectCmd(&homeFlag))
+	root.AddCommand(serviceCmd(&homeFlag))
 	root.AddCommand(versionCmd())
 	return root
 }
@@ -163,48 +164,121 @@ func projectCmd(homeFlag *string) *cobra.Command {
 	return cmd
 }
 
-// projectStopCmd pauses a project: its services (and nested sub-projects) stop,
-// but its row and current SHA stay in the DB, so it remains stopped across daemon
-// restarts until `project start`. Distinct from `remove`, which forgets it.
+// projectStopCmd pauses a project: its services (and nested sub-projects) stop.
+// <name> may be a root project name (e.g. "retu") or a nested sub-project
+// address (e.g. "retu/ingest") — either way it remains paused across daemon
+// restarts until `project start`. Distinct from `remove`, which forgets a root
+// project entirely; a nested address has no "remove" since it isn't tracked
+// independently of its parent's config.
 func projectStopCmd(homeFlag *string) *cobra.Command {
 	return &cobra.Command{
-		Use:   "stop <name>",
-		Short: "Pause a project for maintenance (keeps it tracked)",
+		Use:   "stop <name|address>",
+		Short: "Pause a project or nested sub-project (keeps it tracked)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return setStopped(*homeFlag, args[0], true)
+			return setProjectStopped(*homeFlag, args[0], true)
 		},
 	}
 }
 
-// projectStartCmd resumes a paused project, which recovers from its last SHA.
+// projectStartCmd resumes a paused project or sub-project, which recovers from
+// its last SHA.
 func projectStartCmd(homeFlag *string) *cobra.Command {
 	return &cobra.Command{
-		Use:   "start <name>",
-		Short: "Resume a paused project",
+		Use:   "start <name|address>",
+		Short: "Resume a paused project or nested sub-project",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return setStopped(*homeFlag, args[0], false)
+			return setProjectStopped(*homeFlag, args[0], false)
 		},
 	}
 }
 
-func setStopped(homeFlag, name string, stopped bool) error {
+// setProjectStopped pauses/resumes a project by address. A bare root project
+// name uses the projects table (preserves ref/current_sha across the pause,
+// exactly as before); anything else — a nested sub-project address containing
+// "/" — uses the generic stopped_projects set, since sub-projects have no row
+// of their own (they're discovered from their parent's config each deploy).
+func setProjectStopped(homeFlag, address string, stopped bool) error {
 	database, err := openDB(homeFlag)
 	if err != nil {
 		return err
 	}
 	defer database.Close()
 
-	if err := database.SetStopped(name, stopped); err != nil {
+	if _, gerr := database.GetProject(address); gerr == nil {
+		if err := database.SetStopped(address, stopped); err != nil {
+			return err
+		}
+	} else {
+		if err := database.SetProjectPaused(address, stopped); err != nil {
+			return err
+		}
+	}
+
+	if stopped {
+		fmt.Printf("stopped %q\n", address)
+	} else {
+		fmt.Printf("started %q\n", address)
+	}
+	notifyDaemon(homeFlag) // reconcile: stop or resume it now
+	return nil
+}
+
+// serviceCmd groups start/stop for individual services — a single named process
+// within a project's (or nested sub-project's) services: map. Unlike a project,
+// a service has no independent recovery state: pausing it just stops the
+// process and keeps it out of the spawn set until resumed; its spec is
+// recovered from the owning project's cached config, no rebuild needed.
+func serviceCmd(homeFlag *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "service",
+		Short: "Start/stop an individual service",
+	}
+	cmd.AddCommand(serviceStopCmd(homeFlag))
+	cmd.AddCommand(serviceStartCmd(homeFlag))
+	return cmd
+}
+
+func serviceStopCmd(homeFlag *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop <address> <service>",
+		Short: "Pause one service (e.g. `nexus service stop retu/ingest ingest`)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return setServiceStopped(*homeFlag, args[0], args[1], true)
+		},
+	}
+}
+
+func serviceStartCmd(homeFlag *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "start <address> <service>",
+		Short: "Resume a paused service",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return setServiceStopped(*homeFlag, args[0], args[1], false)
+		},
+	}
+}
+
+func setServiceStopped(homeFlag, address, service string, stopped bool) error {
+	database, err := openDB(homeFlag)
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+
+	key := address + "/" + service
+	if err := database.SetServicePaused(key, stopped); err != nil {
 		return err
 	}
 	if stopped {
-		fmt.Printf("stopped project %q\n", name)
+		fmt.Printf("stopped service %q\n", key)
 	} else {
-		fmt.Printf("started project %q\n", name)
+		fmt.Printf("started service %q\n", key)
 	}
-	notifyDaemon(homeFlag) // reconcile: stop or resume it now
+	notifyDaemon(homeFlag) // reconcile: stop or (re-)spawn it now
 	return nil
 }
 

@@ -175,6 +175,48 @@ func TestDeploy_Success(t *testing.T) {
 	}
 }
 
+// TestDeploy_SkipsStoppedService verifies that a service listed in
+// req.StoppedServices (paused via `nexus service stop`) is never spawned by a
+// deploy, while its sibling still deploys normally — and that VERIFY does not
+// treat the paused service's absence as a crash.
+func TestDeploy_SkipsStoppedService(t *testing.T) {
+	cfg := &config.ProjectFile{
+		Services: map[string]config.Service{
+			"api":    {Run: "python api.py"},
+			"worker": {Run: "python worker.py"},
+		},
+	}
+	sup := &mockSupervisor{
+		statuses: map[string]supervisor.Status{
+			"my-system/api": {Running: true},
+		},
+	}
+
+	dep := newDeployer(t, sup, cfg, nil)
+	must(t, dep.DB.(*db.DB).AddProject(db.Project{
+		Name: "my-system", SpecPath: "github.com/myorg/my-system", Ref: "@main",
+	}))
+
+	req := lifecycle.Request{
+		Name:            "my-system",
+		Address:         "my-system",
+		Ref:             "@main",
+		SpecPath:        "github.com/myorg/my-system",
+		RootSpecPath:    "github.com/myorg/my-system",
+		NewSHA:          "abc123",
+		StoppedServices: map[string]bool{"my-system/worker": true},
+	}
+
+	if err := dep.Deploy(context.Background(), req); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+
+	names := sup.spawnNames()
+	if len(names) != 1 || names[0] != "my-system/api" {
+		t.Errorf("expected only my-system/api spawned, got %v", names)
+	}
+}
+
 func TestDeploy_BuildFailure(t *testing.T) {
 	cfg := &config.ProjectFile{
 		Build:    "make build",

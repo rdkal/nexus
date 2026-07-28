@@ -73,7 +73,10 @@ func splitRoute(rest string) (action, addr, svc string) {
 // Called by `nexus project add`/`remove`. Runs in the background so the CLI gets a
 // fast reply; the actual clone/start happens under the daemon's own context.
 func (d *Daemon) handleReconcile(w http.ResponseWriter, r *http.Request) {
-	go d.reconcileRoots()
+	go func() {
+		d.reconcileRoots()
+		d.reconcileStopped()
+	}()
 	w.WriteHeader(http.StatusAccepted)
 }
 

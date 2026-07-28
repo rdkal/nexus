@@ -201,6 +201,55 @@ func (d *Daemon) reconcileRoots() {
 	}
 }
 
+// reconcileStopped re-applies pause/resume state for every live project and
+// service without waiting for a redeploy. Called after `nexus project stop/start
+// <nested-address>` or `nexus service stop/start` so the effect is immediate:
+//   - a sub-project's pause state is re-checked via reconcileChildren, which
+//     already excludes a paused address from "desired" and stops it like a
+//     removed one (or starts it, if just resumed and still declared in its
+//     parent's config).
+//   - a service's pause state is applied directly against its owning project's
+//     cached svcSpecs: Spawn/Stop are both idempotent, so re-issuing the "wanted"
+//     call for every known service is safe to do on every reconcile pass.
+func (d *Daemon) reconcileStopped() {
+	pausedServices, err := d.DB.PausedServices()
+	if err != nil {
+		slog.Error("daemon: reconcile: list paused services", "err", err)
+		return
+	}
+
+	d.mu.RLock()
+	states := make([]*projectState, 0, len(d.projects))
+	for _, ps := range d.projects {
+		states = append(states, ps)
+	}
+	d.mu.RUnlock()
+
+	ctx := d.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	for _, ps := range states {
+		ps.mu.RLock()
+		cfg := ps.cfg
+		svcSpecs := ps.svcSpecs
+		ps.mu.RUnlock()
+
+		if cfg != nil {
+			d.reconcileChildren(ctx, ps, cfg)
+		}
+		for relName, spec := range svcSpecs {
+			key := serviceKey(ps.address, relName)
+			if pausedServices[key] {
+				d.Sup.Stop(key)
+			} else {
+				d.Sup.Spawn(key, spec)
+			}
+		}
+	}
+}
+
 // startProjectState ensures a bare clone, recovers previously running services if
 // this project has a deployed SHA, registers the project, and launches its poller
 // and deploy-loop goroutines. The project's context is derived from ctx, so
@@ -269,8 +318,17 @@ func (d *Daemon) spawnRecoveredServices(ps *projectState) {
 	}
 	appDir := filepath.Join(worktree, ps.subdir)
 	specs := d.flattenedSpecs(ps.address, ps.ref, sha, appDir, cfg, parentEnv)
+	paused, err := d.DB.PausedServices()
+	if err != nil {
+		slog.Error("daemon: list paused services", "err", err)
+		paused = nil
+	}
 	for relName, spec := range specs {
-		d.Sup.Spawn(serviceKey(ps.address, relName), spec)
+		key := serviceKey(ps.address, relName)
+		if paused[key] {
+			continue // individually paused via `nexus service stop`; spec is kept for a later resume
+		}
+		d.Sup.Spawn(key, spec)
 	}
 	ps.mu.Lock()
 	ps.svcSpecs = specs
@@ -419,6 +477,12 @@ func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 		prevCfg := ps.cfg
 		ps.mu.RUnlock()
 
+		pausedServices, err := d.DB.PausedServices()
+		if err != nil {
+			slog.Error("daemon: list paused services", "err", err)
+			pausedServices = nil
+		}
+
 		req := lifecycle.Request{
 			Name:            ps.address,
 			Address:         ps.address,
@@ -432,6 +496,7 @@ func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 			NewSHA:          sha,
 			PrevSHA:         prevSHA,
 			PrevConfig:      prevCfg,
+			StoppedServices: pausedServices,
 		}
 
 		if err := dep.Deploy(ctx, req); err != nil {
@@ -492,10 +557,24 @@ func sortExternalRefs(refs []config.ExternalRef) {
 // projects are discovered via Flatten and keyed by their relative address (the
 // alias chain from this project), so the diff is stable across nesting levels.
 func (d *Daemon) reconcileChildren(ctx context.Context, ps *projectState, cfg *config.ProjectFile) {
+	paused, err := d.DB.PausedProjects()
+	if err != nil {
+		slog.Error("daemon: reconcile: list paused sub-projects", "err", err)
+		paused = nil
+	}
+
 	_, externals := cfg.Flatten()
 	desired := make(map[string]config.ExternalRef, len(externals))
 	for _, ext := range externals {
-		desired[strings.Join(ext.RelPath, "/")] = ext
+		key := strings.Join(ext.RelPath, "/")
+		// A paused sub-project is excluded from "desired", so the diff below treats
+		// it exactly like a removed one (services stopped) while leaving its DB row
+		// (deployment history / current SHA) untouched — the same pause semantics
+		// as a root project's `nexus project stop`.
+		if paused[ps.address+"/"+key] {
+			continue
+		}
+		desired[key] = ext
 	}
 
 	var toStart []config.ExternalRef   // newly declared

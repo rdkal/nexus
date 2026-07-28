@@ -59,6 +59,27 @@ stopped across a daemon restart until `start` resumes it — recovering from the
 rather than a fresh re-add. This is distinct from `remove`, which forgets the project
 entirely.
 
+`project stop`/`project start` also accept a nested sub-project address (e.g.
+`retu/ingest`), not just a root project name — the sub-project pauses/resumes in place,
+without editing its parent's `nexus.yaml`:
+
+```sh
+nexus project stop retu/ingest    # pause one nested sub-project, parent untouched
+nexus project start retu/ingest   # resume it
+```
+
+For an individual service — one process inside a project's (or nested sub-project's)
+`services:` map — use `nexus service stop`/`nexus service start` instead, addressing it as
+`<project-address> <service-name>`:
+
+```sh
+nexus service stop retu/traefik traefik    # pause just this one process
+nexus service start retu/traefik traefik   # resume it
+```
+
+A paused service is skipped by every deploy and recovery until resumed — its command/env are
+still resolved and cached (so `start` has something to spawn), it is simply never spawned.
+
 The installer adds `$NEXUS_HOME/bin` to `PATH` (idempotently, via `~/.profile`, `~/.bashrc`,
 and `~/.zshrc`) so the `nexus` command is found in new shells; it also prints the one-line
 `export PATH=…` to run in the current shell. The installer requires `git` and `curl` on

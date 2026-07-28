@@ -661,7 +661,10 @@ projects:
       TRAEFIK_DIR: ${NEXUS_RETU_TRAEFIK_DYNAMIC}   # point at another project&#39;s volume</pre></div><p>Two <code>.env</code> files load automatically: one next to the <code>nexus.yaml</code> (committed defaults) and <code>~/.nexus/env/&lt;project&gt;.env</code> (host secrets, not in git, overrides the repo). Interpolate with <code>${VAR}</code>; a reference to an undefined variable fails the deploy instead of expanding to empty — use <code>${VAR:-default}</code> for optionals.</p><p>Every project&#39;s volumes are published to all projects as <code>NEXUS_&lt;PROJECT&gt;_&lt;VOLUME&gt;</code> (e.g. <code>NEXUS_TRAEFIK_DYNAMIC</code>), so one project can reference another&#39;s volume path without hardcoding it. Processes also get <code>NEXUS_PROJECT</code>, <code>NEXUS_SHA</code>, <code>NEXUS_REF</code>, <code>NEXUS_WORKTREE</code>, and <code>NEXUS_VOLUME_&lt;NAME&gt;</code> for their own volumes — but nothing else from the daemon&#39;s environment, so one project&#39;s secrets stay invisible to another. Precedence, low to high:</p><div class="panel"><pre class="code">essentials &lt; repo .env &lt; project env &lt; service env
   &lt; parent projects: env &lt; ~/.nexus/env/&lt;project&gt;.env &lt; NEXUS_*</pre></div><h2>CLI commands</h2><p>The daemon runs as a background service; these are the commands you use. <code>add</code>, <code>remove</code>, <code>stop</code>, and <code>start</code> take effect immediately — the CLI updates the database and nudges the running daemon. Add <code>--home</code> to target a non-default <code>NEXUS_HOME</code>.</p><div class="panel"><pre class="code">nexus project add &lt;spec&gt;[:name] [--ref &lt;ref&gt;]   register a project, deploy it now
 nexus project list                              projects with their SHA and status
-nexus project stop &lt;name&gt;                       pause: stop services, stay tracked
-nexus project start &lt;name&gt;                      resume from the last deployed SHA
-nexus project remove &lt;name&gt;                     forget a project (stops it too)
+nexus project stop &lt;name|address&gt;               pause: stop services, stay tracked
+                                                 (a root name or a nested address, e.g. retu/ingest)
+nexus project start &lt;name|address&gt;              resume from the last deployed SHA
+nexus project remove &lt;name&gt;                     forget a root project (stops it too)
+nexus service stop &lt;address&gt; &lt;service&gt;          pause one service inside a project
+nexus service start &lt;address&gt; &lt;service&gt;         resume a paused service
 nexus version                                   print the installed version</pre></div></div></div></body></html>

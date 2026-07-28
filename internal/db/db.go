@@ -37,6 +37,19 @@ CREATE TABLE IF NOT EXISTS services (
     last_exit_code  INTEGER,
     last_exit_at    INTEGER
 );
+
+-- Pause state for sub-projects (nested, not root — roots use projects.stopped)
+-- and for individual services. Keyed by resource address; presence means paused.
+-- Kept as separate tables (rather than reusing one keyspace) because a
+-- sub-project's address and a leaf service's full key share the same
+-- slash-joined shape and could otherwise collide.
+CREATE TABLE IF NOT EXISTS stopped_projects (
+    address TEXT PRIMARY KEY
+);
+
+CREATE TABLE IF NOT EXISTS stopped_services (
+    address TEXT PRIMARY KEY
+);
 `
 
 // DB wraps a SQLite connection with nexus-specific operations.
@@ -212,6 +225,72 @@ func (d *DB) SetStopped(name string, stopped bool) error {
 		return fmt.Errorf("project %q not found", name)
 	}
 	return nil
+}
+
+// SetProjectPaused pauses (or resumes) a nested sub-project by address. Unlike
+// SetStopped, this table has no per-project row of its own — a sub-project is
+// discovered from its parent's config, not tracked independently — so pausing
+// is purely "is this address in the set", with no SHA or ref to preserve.
+func (d *DB) SetProjectPaused(address string, paused bool) error {
+	if paused {
+		_, err := d.conn.Exec(`INSERT OR IGNORE INTO stopped_projects (address) VALUES (?)`, address)
+		if err != nil {
+			return fmt.Errorf("pause sub-project %q: %w", address, err)
+		}
+		return nil
+	}
+	_, err := d.conn.Exec(`DELETE FROM stopped_projects WHERE address = ?`, address)
+	if err != nil {
+		return fmt.Errorf("resume sub-project %q: %w", address, err)
+	}
+	return nil
+}
+
+// PausedProjects returns the set of currently-paused sub-project addresses.
+func (d *DB) PausedProjects() (map[string]bool, error) {
+	return d.addressSet(`SELECT address FROM stopped_projects`)
+}
+
+// SetServicePaused pauses (or resumes) an individual service by its full
+// supervisor key (address/service). The service's spec is not stored here —
+// it is recovered from the owning project's cached svcSpecs — so pausing is
+// purely "is this key in the set".
+func (d *DB) SetServicePaused(key string, paused bool) error {
+	if paused {
+		_, err := d.conn.Exec(`INSERT OR IGNORE INTO stopped_services (address) VALUES (?)`, key)
+		if err != nil {
+			return fmt.Errorf("pause service %q: %w", key, err)
+		}
+		return nil
+	}
+	_, err := d.conn.Exec(`DELETE FROM stopped_services WHERE address = ?`, key)
+	if err != nil {
+		return fmt.Errorf("resume service %q: %w", key, err)
+	}
+	return nil
+}
+
+// PausedServices returns the set of currently-paused service keys.
+func (d *DB) PausedServices() (map[string]bool, error) {
+	return d.addressSet(`SELECT address FROM stopped_services`)
+}
+
+func (d *DB) addressSet(query string) (map[string]bool, error) {
+	rows, err := d.conn.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("query address set: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]bool)
+	for rows.Next() {
+		var addr string
+		if err := rows.Scan(&addr); err != nil {
+			return nil, err
+		}
+		out[addr] = true
+	}
+	return out, rows.Err()
 }
 
 func boolToInt(b bool) int {

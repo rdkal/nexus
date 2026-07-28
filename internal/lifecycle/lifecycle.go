@@ -87,6 +87,13 @@ type Request struct {
 	// Needed to know which services to stop during SHUTDOWN and to re-spawn on ROLLBACK.
 	// Nil if this is the first deployment.
 	PrevConfig *config.ProjectFile
+
+	// StoppedServices is the set of full supervisor keys (address/service) that
+	// are paused via `nexus service stop`. Such a service is never spawned by a
+	// deploy or a rollback — its spec is still resolved (so a later `nexus
+	// service start` has something to spawn from ps.svcSpecs) but SHUTDOWN still
+	// stops it if it happened to be running from before the pause.
+	StoppedServices map[string]bool
 }
 
 // plannedService is a service whose environment has been resolved and is ready
@@ -236,13 +243,18 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 	// SHUTDOWN: stop all services of the current deployment (across all units) in parallel.
 	d.stopUnits(req.Address, prevUnits)
 
-	// STARTUP: spawn the services planned above from the new worktree.
+	// STARTUP: spawn the services planned above from the new worktree, except any
+	// individually paused via `nexus service stop` — those stay down until resumed.
 	for _, ps := range toSpawn {
+		if req.StoppedServices[ps.key] {
+			continue
+		}
 		d.Sup.Spawn(ps.key, ps.spec)
 	}
 
-	// VERIFY: observe services for VerifyWindow; any crash triggers rollback.
-	if err := d.verify(newUnits, req.Address); err != nil {
+	// VERIFY: observe services for VerifyWindow; any crash triggers rollback. A
+	// paused service is expected to be absent, so it is excluded from the check.
+	if err := d.verify(newUnits, req.Address, req.StoppedServices); err != nil {
 		slog.Warn("deploy: verify failed, rolling back",
 			"address", req.Address, "sha", req.NewSHA, "err", err)
 		d.rollback(req, newUnits, prevUnits, prevWorktree, removeNewWorktree)
@@ -280,13 +292,17 @@ func (d *Deployer) rollback(
 	// Stop new (failed) services across all units.
 	d.stopUnits(req.Address, newUnits)
 
-	// Re-spawn old services (across all units) from the previous worktree's app dir.
+	// Re-spawn old services (across all units) from the previous worktree's app dir,
+	// except any individually paused via `nexus service stop`.
 	if prevWorktree != "" {
 		prevDir := filepath.Join(prevWorktree, req.Subdir)
 		for _, u := range prevUnits {
 			uAddr := unitAddress(req.Address, u.RelPath)
 			for name, svc := range u.Services {
 				key := serviceKey(uAddr, name)
+				if req.StoppedServices[key] {
+					continue
+				}
 				env, err := d.env(uAddr, req.PrevSHA, prevDir, req, u.Environment, svc.Environment, u.Volumes)
 				if err != nil {
 					slog.Error("rollback: env build failed", "service", key, "err", err)
@@ -325,10 +341,17 @@ func (d *Deployer) stopUnits(base string, units []config.InlineUnit) {
 
 // verify polls all service statuses (across all units) for VerifyWindow. Returns an
 // error if any service crashes (Restarts > 0) or becomes degraded within the window.
-func (d *Deployer) verify(units []config.InlineUnit, base string) error {
+// Services in stopped are intentionally not running (paused via `nexus service
+// stop`) and are skipped rather than reported as "disappeared".
+func (d *Deployer) verify(units []config.InlineUnit, base string, stopped map[string]bool) error {
 	total := 0
 	for _, u := range units {
-		total += len(u.Services)
+		uAddr := unitAddress(base, u.RelPath)
+		for name := range u.Services {
+			if !stopped[serviceKey(uAddr, name)] {
+				total++
+			}
+		}
 	}
 	if total == 0 {
 		return nil
@@ -357,6 +380,9 @@ func (d *Deployer) verify(units []config.InlineUnit, base string) error {
 				uAddr := unitAddress(base, u.RelPath)
 				for name := range u.Services {
 					key := serviceKey(uAddr, name)
+					if stopped[key] {
+						continue
+					}
 					st, ok := d.Sup.Status(key)
 					if !ok {
 						return fmt.Errorf("service %q disappeared", key)

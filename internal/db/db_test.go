@@ -294,3 +294,70 @@ func TestSetStoppedNonexistent(t *testing.T) {
 		t.Error("expected error for unknown project")
 	}
 }
+
+func TestSetProjectPaused(t *testing.T) {
+	d := openDB(t)
+
+	paused, err := d.PausedProjects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paused) != 0 {
+		t.Errorf("fresh DB should have no paused sub-projects, got %v", paused)
+	}
+
+	if err := d.SetProjectPaused("retu/ingest", true); err != nil {
+		t.Fatalf("SetProjectPaused(true): %v", err)
+	}
+	// Idempotent: pausing an already-paused address is not an error.
+	if err := d.SetProjectPaused("retu/ingest", true); err != nil {
+		t.Fatalf("SetProjectPaused(true) again: %v", err)
+	}
+
+	paused, err = d.PausedProjects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !paused["retu/ingest"] {
+		t.Errorf("expected retu/ingest paused, got %v", paused)
+	}
+
+	if err := d.SetProjectPaused("retu/ingest", false); err != nil {
+		t.Fatalf("SetProjectPaused(false): %v", err)
+	}
+	paused, _ = d.PausedProjects()
+	if paused["retu/ingest"] {
+		t.Error("retu/ingest should no longer be paused")
+	}
+	// Resuming something never paused is a no-op, not an error.
+	if err := d.SetProjectPaused("never-paused", false); err != nil {
+		t.Fatalf("SetProjectPaused(false) on unpaused address: %v", err)
+	}
+}
+
+func TestSetServicePaused(t *testing.T) {
+	d := openDB(t)
+
+	if err := d.SetServicePaused("retu/traefik/traefik", true); err != nil {
+		t.Fatalf("SetServicePaused(true): %v", err)
+	}
+	paused, err := d.PausedServices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !paused["retu/traefik/traefik"] {
+		t.Errorf("expected retu/traefik/traefik paused, got %v", paused)
+	}
+	// A distinct key with the same prefix stays untouched (no accidental prefix match).
+	if paused["retu/traefik"] {
+		t.Error("stopped_services must key on the full service address, not a prefix")
+	}
+
+	if err := d.SetServicePaused("retu/traefik/traefik", false); err != nil {
+		t.Fatalf("SetServicePaused(false): %v", err)
+	}
+	paused, _ = d.PausedServices()
+	if paused["retu/traefik/traefik"] {
+		t.Error("service should no longer be paused")
+	}
+}
