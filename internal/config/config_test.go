@@ -355,3 +355,53 @@ services:
 		t.Errorf("bare key forward = %q, want ${CF_TOKEN}", got)
 	}
 }
+
+func TestParseTasks(t *testing.T) {
+	f, err := config.ParseBytes([]byte(`
+tasks:
+  fetch:
+    schedule: "0 2 * * *"
+    run: ./fetch.sh
+  transform:
+    after: fetch
+    run: ./transform.sh
+    environment:
+      MODE: full
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Tasks["fetch"].Schedule != "0 2 * * *" || f.Tasks["fetch"].Run != "./fetch.sh" {
+		t.Errorf("fetch = %+v", f.Tasks["fetch"])
+	}
+	if f.Tasks["transform"].After != "fetch" || f.Tasks["transform"].Environment["MODE"] != "full" {
+		t.Errorf("transform = %+v", f.Tasks["transform"])
+	}
+	if err := config.ValidateTasks(f.Tasks); err != nil {
+		t.Errorf("valid tasks rejected: %v", err)
+	}
+}
+
+func TestValidateTasks(t *testing.T) {
+	cases := map[string]map[string]config.Task{
+		"missing run":      {"a": {Schedule: "@daily"}},
+		"both triggers":    {"a": {Run: "x", Schedule: "@daily", After: "b"}, "b": {Run: "y"}},
+		"unknown after":    {"a": {Run: "x", After: "ghost"}},
+		"self cycle":       {"a": {Run: "x", After: "a"}},
+		"two-node cycle":   {"a": {Run: "x", After: "b"}, "b": {Run: "y", After: "a"}},
+	}
+	for name, tasks := range cases {
+		if err := config.ValidateTasks(tasks); err == nil {
+			t.Errorf("%s: expected error", name)
+		}
+	}
+	// A valid chain passes.
+	ok := map[string]config.Task{
+		"a": {Run: "x", Schedule: "@daily"},
+		"b": {Run: "y", After: "a"},
+		"c": {Run: "z", After: "b"},
+	}
+	if err := config.ValidateTasks(ok); err != nil {
+		t.Errorf("valid chain rejected: %v", err)
+	}
+}

@@ -103,6 +103,13 @@ class NexusClient:
         )
         return status, body
 
+    def list_task_runs(self, address: str):
+        _, body = self._request("GET", f"/projects/{address}/tasks")
+        return body
+
+    def run_task(self, address: str, task: str):
+        return self._request("POST", f"/projects/{address}/tasks/{task}/run")
+
 
 # ---------------------------------------------------------------------------
 # Session fixture: build binaries once

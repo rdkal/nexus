@@ -49,6 +49,12 @@ func splitRoute(rest string) (action, addr, svc string) {
 		return "buildlog", strings.Join(segs[:n-3], "/"), segs[n-2]
 	}
 
+	// Task manual run: <addr>/tasks/<task>/run. Task names have no slashes, so
+	// "tasks" is always the third-from-last segment; svc carries the task name.
+	if last == "run" && n >= 4 && segs[n-3] == "tasks" {
+		return "taskrun", strings.Join(segs[:n-3], "/"), segs[n-2]
+	}
+
 	// Service sub-resource: <addr>/services/<svc...>/{log|restart}.
 	if last == "log" || last == "restart" {
 		for i := 1; i <= n-3; i++ {
@@ -60,7 +66,7 @@ func splitRoute(rest string) (action, addr, svc string) {
 
 	// Project sub-resource or collection.
 	switch last {
-	case "history", "redeploy", "services":
+	case "history", "redeploy", "services", "tasks":
 		if n >= 2 {
 			return last, strings.Join(segs[:n-1], "/"), ""
 		}
@@ -90,6 +96,8 @@ func (d *Daemon) handleProjectGet(w http.ResponseWriter, r *http.Request) {
 		d.getHistory(w, addr)
 	case "services":
 		d.listServices(w, addr)
+	case "tasks":
+		d.listTaskRuns(w, addr)
 	case "log":
 		d.getLog(w, addr, svc)
 	case "buildlog":
@@ -107,9 +115,56 @@ func (d *Daemon) handleProjectPost(w http.ResponseWriter, r *http.Request) {
 		d.redeploy(w, addr)
 	case "restart":
 		d.restartService(w, addr, svc)
+	case "taskrun":
+		d.handleTaskRun(w, addr, svc) // svc carries the task name
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// handleTaskRun manually fires a task (and cascades to its after: dependents).
+func (d *Daemon) handleTaskRun(w http.ResponseWriter, address, task string) {
+	if err := d.triggerTask(address, task); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	writeJSON(w, map[string]string{"triggered": address + "/" + task})
+}
+
+type taskRunRecord struct {
+	ID         int64  `json:"id"`
+	Task       string `json:"task"`
+	Reason     string `json:"reason"`
+	Status     string `json:"status"`
+	ExitCode   *int   `json:"exit_code,omitempty"`
+	StartedAt  int64  `json:"started_at"`
+	FinishedAt *int64 `json:"finished_at,omitempty"`
+}
+
+// listTaskRuns returns a project's recent task runs, newest first.
+func (d *Daemon) listTaskRuns(w http.ResponseWriter, address string) {
+	runs, err := d.DB.ListTaskRuns(address, 50)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := make([]taskRunRecord, 0, len(runs))
+	for _, r := range runs {
+		rec := taskRunRecord{
+			ID:        r.ID,
+			Task:      r.Task,
+			Reason:    r.Reason,
+			Status:    r.Status,
+			ExitCode:  r.ExitCode,
+			StartedAt: r.StartedAt.Unix(),
+		}
+		if r.FinishedAt != nil {
+			f := r.FinishedAt.Unix()
+			rec.FinishedAt = &f
+		}
+		out = append(out, rec)
+	}
+	writeJSON(w, out)
 }
 
 // ServeHTTP implements http.Handler so the daemon can be used directly in tests.

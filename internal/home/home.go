@@ -108,6 +108,12 @@ func (p Paths) ServiceLog(address string) string {
 	return filepath.Join(p.LogDir(address), "current.log")
 }
 
+// TaskLog returns the rolling log path for a task's runs.
+// e.g. TaskLog("my-system", "backup") → <home>/logs/my-system/tasks/backup/current.log
+func (p Paths) TaskLog(address, task string) string {
+	return filepath.Join(p.LogDir(address), "tasks", task, "current.log")
+}
+
 // RepoDir returns the bare clone directory for a spec path.
 // e.g. RepoDir("github.com/myorg/api") → <home>/repos/github.com/myorg/api
 func (p Paths) RepoDir(specPath string) string {

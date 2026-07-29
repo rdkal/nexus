@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
 
@@ -104,8 +107,109 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(daemonCmd(&homeFlag))
 	root.AddCommand(projectCmd(&homeFlag))
 	root.AddCommand(serviceCmd(&homeFlag))
+	root.AddCommand(taskCmd(&homeFlag))
 	root.AddCommand(versionCmd())
 	return root
+}
+
+// daemonDo makes a request to the running daemon over its Unix socket.
+func daemonDo(homeFlag, method, path string) (int, []byte, error) {
+	homeDir, err := resolveHome(homeFlag)
+	if err != nil {
+		return 0, nil, err
+	}
+	sock := home.NewPaths(homeDir).Socket
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", sock)
+			},
+		},
+	}
+	req, err := http.NewRequest(method, "http://nexus"+path, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("daemon not reachable at %s: %w", sock, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, body, nil
+}
+
+func taskCmd(homeFlag *string) *cobra.Command {
+	cmd := &cobra.Command{Use: "task", Short: "Trigger and inspect tasks"}
+	cmd.AddCommand(taskRunCmd(homeFlag))
+	cmd.AddCommand(taskListCmd(homeFlag))
+	return cmd
+}
+
+func taskRunCmd(homeFlag *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "run <project>/<task>",
+		Short: "Trigger a task now (cascades to its after: dependents)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			i := strings.LastIndex(args[0], "/")
+			if i < 0 {
+				return fmt.Errorf("expected <project>/<task>, got %q", args[0])
+			}
+			addr, task := args[0][:i], args[0][i+1:]
+			code, body, err := daemonDo(*homeFlag, "POST", "/projects/"+addr+"/tasks/"+task+"/run")
+			if err != nil {
+				return err
+			}
+			if code != http.StatusOK {
+				return fmt.Errorf("%s", strings.TrimSpace(string(body)))
+			}
+			fmt.Printf("triggered %s/%s\n", addr, task)
+			return nil
+		},
+	}
+}
+
+func taskListCmd(homeFlag *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "list <project>",
+		Short: "Show recent task runs for a project",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			code, body, err := daemonDo(*homeFlag, "GET", "/projects/"+args[0]+"/tasks")
+			if err != nil {
+				return err
+			}
+			if code != http.StatusOK {
+				return fmt.Errorf("%s", strings.TrimSpace(string(body)))
+			}
+			var runs []struct {
+				Task      string `json:"task"`
+				Reason    string `json:"reason"`
+				Status    string `json:"status"`
+				ExitCode  *int   `json:"exit_code"`
+				StartedAt int64  `json:"started_at"`
+			}
+			if err := json.Unmarshal(body, &runs); err != nil {
+				return err
+			}
+			if len(runs) == 0 {
+				fmt.Println("no task runs")
+				return nil
+			}
+			for _, r := range runs {
+				when := time.Unix(r.StartedAt, 0).Format("2006-01-02 15:04:05")
+				exit := ""
+				if r.ExitCode != nil {
+					exit = fmt.Sprintf(" exit=%d", *r.ExitCode)
+				}
+				fmt.Printf("%-19s  %-16s  %-8s  %s%s\n", when, r.Task, r.Status, r.Reason, exit)
+			}
+			return nil
+		},
+	}
 }
 
 func versionCmd() *cobra.Command {
