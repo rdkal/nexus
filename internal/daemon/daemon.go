@@ -57,6 +57,9 @@ type Daemon struct {
 
 	reconcileMu sync.Mutex // serialises reconcileRoots
 
+	// runTask executes a task's command. Injectable for tests; defaults to execTask.
+	runTask taskRunFn
+
 	mu sync.RWMutex
 	// projects holds every live project keyed by resource address. This includes
 	// both root projects and discovered external sub-projects (e.g. "my-system/db").
@@ -88,6 +91,8 @@ type projectState struct {
 	svcSpecs           map[string]supervisor.ServiceSpec // keyed by service name
 	children           map[string]*projectState          // external sub-projects, keyed by alias
 	recoveryIncomplete bool                              // a service was skipped on recovery (env unresolved)
+	scheduler          *taskScheduler                    // current deployment's task scheduler (nil = no tasks)
+	taskCancel         context.CancelFunc                // cancels the current task scheduler
 }
 
 // New creates a Daemon ready to be started with Run.
@@ -101,6 +106,7 @@ func New(database *db.DB, sup SupervisorAPI, paths home.Paths) *Daemon {
 		Sup:          sup,
 		Paths:        paths,
 		SelfSpecPath: selfSpec,
+		runTask:      execTask,
 		projects:     make(map[string]*projectState),
 	}
 }
@@ -303,6 +309,7 @@ func (d *Daemon) recoverProject(ctx context.Context, ps *projectState) {
 	d.spawnRecoveredServices(ps)
 	slog.Info("daemon: recovered project", "address", ps.address, "sha", sha)
 
+	d.startTasks(ctx, ps)
 	d.reconcileChildren(ctx, ps, cfg)
 }
 
@@ -528,6 +535,9 @@ func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 		ps.svcSpecs = specs
 		ps.mu.Unlock()
 
+		// (Re)start this deployment's task scheduler with the new config.
+		d.startTasks(ctx, ps)
+
 		// Start/stop external sub-projects declared in the newly deployed config.
 		// Skip on a reload error: an empty config would spuriously tear down every
 		// sub-project even though the deployment itself succeeded.
@@ -720,6 +730,14 @@ func (d *Daemon) stopProjectState(ps *projectState) {
 	if ps.cancel != nil {
 		ps.cancel()
 	}
+
+	ps.mu.Lock()
+	if ps.taskCancel != nil {
+		ps.taskCancel()
+		ps.taskCancel = nil
+		ps.scheduler = nil
+	}
+	ps.mu.Unlock()
 
 	ps.mu.RLock()
 	specs := ps.svcSpecs

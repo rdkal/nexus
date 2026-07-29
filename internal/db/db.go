@@ -50,6 +50,18 @@ CREATE TABLE IF NOT EXISTS stopped_projects (
 CREATE TABLE IF NOT EXISTS stopped_services (
     address TEXT PRIMARY KEY
 );
+
+-- One row per task fire. status starts 'running' and is finalised on exit.
+CREATE TABLE IF NOT EXISTS task_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    address     TEXT NOT NULL,   -- project address the task belongs to
+    task        TEXT NOT NULL,
+    reason      TEXT NOT NULL,   -- 'schedule' | 'after:<task>' | 'manual'
+    status      TEXT NOT NULL CHECK(status IN ('running','success','failed')),
+    exit_code   INTEGER,
+    started_at  INTEGER NOT NULL,
+    finished_at INTEGER
+);
 `
 
 // DB wraps a SQLite connection with nexus-specific operations.
@@ -196,6 +208,77 @@ func (d *DB) FinishDeployment(id int64, status string, finishedAt time.Time) err
 		return fmt.Errorf("finish deployment %d: %w", id, err)
 	}
 	return nil
+}
+
+// TaskRun is one execution of a task.
+type TaskRun struct {
+	ID         int64
+	Address    string
+	Task       string
+	Reason     string
+	Status     string // running | success | failed
+	ExitCode   *int
+	StartedAt  time.Time
+	FinishedAt *time.Time
+}
+
+// AddTaskRun records the start of a task run (status 'running') and returns its ID.
+func (d *DB) AddTaskRun(address, task, reason string, startedAt time.Time) (int64, error) {
+	res, err := d.conn.Exec(
+		`INSERT INTO task_runs (address, task, reason, status, started_at) VALUES (?, ?, ?, 'running', ?)`,
+		address, task, reason, startedAt.Unix(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("add task run: %w", err)
+	}
+	return res.LastInsertId()
+}
+
+// FinishTaskRun finalises a task run with its outcome and exit code.
+func (d *DB) FinishTaskRun(id int64, status string, exitCode int, finishedAt time.Time) error {
+	_, err := d.conn.Exec(
+		`UPDATE task_runs SET status = ?, exit_code = ?, finished_at = ? WHERE id = ?`,
+		status, exitCode, finishedAt.Unix(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("finish task run %d: %w", id, err)
+	}
+	return nil
+}
+
+// ListTaskRuns returns up to limit runs for a project, newest first.
+func (d *DB) ListTaskRuns(address string, limit int) ([]TaskRun, error) {
+	rows, err := d.conn.Query(
+		`SELECT id, address, task, reason, status, exit_code, started_at, finished_at
+		 FROM task_runs WHERE address = ? ORDER BY started_at DESC, id DESC LIMIT ?`,
+		address, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list task runs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []TaskRun
+	for rows.Next() {
+		var r TaskRun
+		var exit *int64
+		var started int64
+		var finished *int64
+		if err := rows.Scan(&r.ID, &r.Address, &r.Task, &r.Reason, &r.Status, &exit, &started, &finished); err != nil {
+			return nil, err
+		}
+		r.StartedAt = time.Unix(started, 0)
+		if exit != nil {
+			e := int(*exit)
+			r.ExitCode = &e
+		}
+		if finished != nil {
+			t := time.Unix(*finished, 0)
+			r.FinishedAt = &t
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // GetProject returns a single project by name.

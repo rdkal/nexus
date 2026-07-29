@@ -186,6 +186,12 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 		removeNewWorktree()
 		return fmt.Errorf("load config: %w", err)
 	}
+	// Validate the task graph up front — an unknown after: target or a cycle fails
+	// the deploy loudly rather than mis-scheduling.
+	if err := config.ValidateTasks(cfg.Tasks); err != nil {
+		removeNewWorktree()
+		return fmt.Errorf("tasks: %w", err)
+	}
 	newUnits, _ := cfg.Flatten()
 	var prevUnits []config.InlineUnit
 	if req.PrevConfig != nil {

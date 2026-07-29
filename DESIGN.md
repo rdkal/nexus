@@ -677,10 +677,13 @@ surfaced in the web UI as the task graph and its run history.
 task, or a cycle (`a after b`, `b after a`), is a deploy error — the same fail-loud posture as an
 undefined `${VAR}`.
 
-**Process ownership** follows the three-process split (see Self-Update): the `nexus` runtime owns
-the *scheduling* (computing the next fire and reacting to completions), while the task command is
-run as a **one-shot** unit under `nexus-pm` — supervised and log-captured like a service, but
-**not** restarted on exit, so a runtime restart never orphans a running task.
+**Process ownership.** The `nexus` runtime owns both the *scheduling* (computing the next fire
+and reacting to completions) and, in v1, the *execution* — it runs the task command directly
+(`sh -c` in the worktree, output appended to `logs/<address>/tasks/<task>/current.log`) and
+records the outcome. Because a task is short-lived and a runtime restart (self-update) is rare,
+the trade-off of a restart interrupting an in-flight task is acceptable for now; running tasks
+one-shot **under nexus-pm** (so they survive a runtime restart, like services) is a hardening
+follow-up (see below).
 
 ### Designed soon
 
@@ -699,6 +702,9 @@ core (single-parent `after:`, on-success, one project) ships small:
   cross-project volume variables already cross the project boundary.
 - **Web UI for tasks** — the task graph, per-task run history, last-run status/next-fire time,
   and a manual-run button, added to nexus-web.
+- **One-shot execution under nexus-pm** — run a fired task as a supervised (but not restarted)
+  one-shot under `nexus-pm` instead of directly in the runtime, so a runtime restart never
+  orphans an in-flight task, matching how services survive self-update.
 
 The heavier, fully general version of all of this — conditional edges, approvals, cross-project
 orchestration — remains the deferred **Flows / pipelines** item; tasks-with-triggers is the
@@ -1002,9 +1008,7 @@ They are slower and intended to run in CI rather than on every save.
 - Go daemon with Unix socket internal API
 - Python/iris web UI as a supervised nexus service (port 7777)
 - REST API served by the Python process
-
-**Not yet implemented, designed:**
-- Tasks (scheduled & triggered) — see the [Tasks](#tasks-scheduled--triggered) section
+- Tasks (scheduled & triggered) — cron/`@every`/`after:` triggers, manual `nexus task run`, one-shot execution, `task_runs` history (see the [Tasks](#tasks-scheduled--triggered) section)
 
 **Explicitly deferred:**
 - Flows / pipelines — the fully general version of tasks (fan-in joins, failure-mode/conditional edges, cross-project triggers, approvals); tasks-with-triggers is the composable core it builds on

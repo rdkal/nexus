@@ -15,12 +15,22 @@ type ProjectFile struct {
 	Environment Env                   `yaml:"environment"`
 	Volumes     map[string]struct{}   `yaml:"volumes"`
 	Services    map[string]Service    `yaml:"services"`
+	Tasks       map[string]Task       `yaml:"tasks"`
 	Projects    map[string]SubProject `yaml:"projects"`
 }
 
 // Service is a named long-running process.
 type Service struct {
 	Run         string `yaml:"run"`
+	Environment Env    `yaml:"environment"`
+}
+
+// Task is a one-shot command run on a trigger: a cron schedule, another task's
+// success (After), or manually. See DESIGN "Tasks (scheduled & triggered)".
+type Task struct {
+	Run         string `yaml:"run"`
+	Schedule    string `yaml:"schedule"` // cron / "@every 15m" / "@daily" — a time trigger
+	After       string `yaml:"after"`    // another task in this file — run when it succeeds
 	Environment Env    `yaml:"environment"`
 }
 
@@ -147,6 +157,43 @@ func ParseBytes(data []byte) (*ProjectFile, error) {
 		return nil, fmt.Errorf("parse nexus.yaml: %w", err)
 	}
 	return &f, nil
+}
+
+// ValidateTasks checks a project's tasks: each has a run command and at most one
+// trigger, every after: names a real sibling task, and the after: graph has no
+// cycle. Returns the first problem found (deploy fails loudly, like an undefined
+// ${VAR}).
+func ValidateTasks(tasks map[string]Task) error {
+	for name, t := range tasks {
+		if t.Run == "" {
+			return fmt.Errorf("task %q: missing run", name)
+		}
+		if t.Schedule != "" && t.After != "" {
+			return fmt.Errorf("task %q: set only one of schedule or after", name)
+		}
+		if t.After != "" {
+			if _, ok := tasks[t.After]; !ok {
+				return fmt.Errorf("task %q: after references unknown task %q", name, t.After)
+			}
+		}
+	}
+	// Detect a cycle in the after chain (each task has at most one after → a cycle
+	// is a simple loop; walk each chain with a visited set).
+	for name := range tasks {
+		seen := map[string]bool{}
+		for cur := name; ; {
+			after := tasks[cur].After
+			if after == "" {
+				break
+			}
+			if seen[after] {
+				return fmt.Errorf("task %q: after: forms a cycle", name)
+			}
+			seen[after] = true
+			cur = after
+		}
+	}
+	return nil
 }
 
 // InlineUnit is one project within an inline subtree: the base project plus every
