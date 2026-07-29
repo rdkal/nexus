@@ -677,13 +677,15 @@ surfaced in the web UI as the task graph and its run history.
 task, or a cycle (`a after b`, `b after a`), is a deploy error — the same fail-loud posture as an
 undefined `${VAR}`.
 
-**Process ownership.** The `nexus` runtime owns both the *scheduling* (computing the next fire
-and reacting to completions) and, in v1, the *execution* — it runs the task command directly
-(`sh -c` in the worktree, output appended to `logs/<address>/tasks/<task>/current.log`) and
-records the outcome. Because a task is short-lived and a runtime restart (self-update) is rare,
-the trade-off of a restart interrupting an in-flight task is acceptable for now; running tasks
-one-shot **under nexus-pm** (so they survive a runtime restart, like services) is a hardening
-follow-up (see below).
+**Process ownership** follows the three-process split (see Self-Update): the `nexus` runtime
+owns the *scheduling* (computing the next fire and reacting to completions), while the fired
+command is run **under nexus-pm** — a one-shot `POST /run` on `nexus-pm.sock` that starts the
+process, captures its output to `logs/<address>/tasks/<task>/current.log`, and blocks until it
+returns the exit code. Because nexus-pm (not the runtime) owns the process, a task keeps
+running even if the runtime restarts mid-task — the same reason user services survive a
+self-update. Unlike a service it is not restarted on exit; its exit code drives the `after:`
+cascade and is recorded in `task_runs`. (If the runtime restarts mid-task the process still
+completes, but that run's exit code is lost to the runtime.)
 
 ### Designed soon
 
@@ -702,9 +704,6 @@ core (single-parent `after:`, on-success, one project) ships small:
   cross-project volume variables already cross the project boundary.
 - **Web UI for tasks** — the task graph, per-task run history, last-run status/next-fire time,
   and a manual-run button, added to nexus-web.
-- **One-shot execution under nexus-pm** — run a fired task as a supervised (but not restarted)
-  one-shot under `nexus-pm` instead of directly in the runtime, so a runtime restart never
-  orphans an in-flight task, matching how services survive self-update.
 
 The heavier, fully general version of all of this — conditional edges, approvals, cross-project
 orchestration — remains the deferred **Flows / pipelines** item; tasks-with-triggers is the
@@ -933,6 +932,7 @@ The process manager API is used exclusively by the nexus runtime:
 POST   /services/{key}      spawn a service (no-op if already running)
 DELETE /services/{key}      stop a service (blocks until exited)
 GET    /services/{key}      service status
+POST   /run                 run a one-shot task to completion; returns its exit code
 POST   /runtime/restart     stop and restart the nexus runtime binary
 ```
 

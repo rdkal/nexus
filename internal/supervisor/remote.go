@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 )
 
 // RemoteSupervisor implements Spawn/Stop/Status by forwarding calls to nexus-pm
@@ -71,6 +73,34 @@ func (r *RemoteSupervisor) Status(name string) (Status, bool) {
 		return Status{}, false
 	}
 	return st, true
+}
+
+// RunOnce asks nexus-pm to run a one-shot command to completion and returns its
+// exit code. It blocks for the command's whole duration. Because nexus-pm (not the
+// runtime) owns the process, the command keeps running even if the runtime
+// restarts mid-task — though in that case its exit code is lost to the runtime.
+func (r *RemoteSupervisor) RunOnce(spec ServiceSpec) (int, error) {
+	body, _ := json.Marshal(spec)
+	resp, err := r.client.Post("http://nexus-pm/run", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return -1, fmt.Errorf("run: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return -1, fmt.Errorf("run: %s", strings.TrimSpace(string(b)))
+	}
+	var out struct {
+		ExitCode int    `json:"exit_code"`
+		Error    string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return -1, fmt.Errorf("run: decode response: %w", err)
+	}
+	if out.Error != "" {
+		return out.ExitCode, fmt.Errorf("%s", out.Error)
+	}
+	return out.ExitCode, nil
 }
 
 // RestartRuntime asks nexus-pm to stop and restart the nexus runtime binary.

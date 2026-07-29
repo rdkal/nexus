@@ -13,6 +13,7 @@ import (
 	"github.com/rdkal/nexus/internal/config"
 	"github.com/rdkal/nexus/internal/cron"
 	"github.com/rdkal/nexus/internal/penv"
+	"github.com/rdkal/nexus/internal/supervisor"
 )
 
 // taskRunFn runs a task's shell command in workDir with env, appending output to
@@ -167,7 +168,25 @@ func (s *taskScheduler) execute(ctx context.Context, name string) (int, error) {
 
 func (s *taskScheduler) key(name string) string { return s.address + "/" + name }
 
-// execTask is the default taskRunFn: sh -c in workDir, output appended to logFile.
+// runTaskViaSupervisor runs a task through nexus-pm (POST /run) so the process is
+// owned by the process manager and survives a nexus runtime restart. It falls back
+// to a direct in-runtime exec when the supervisor has no one-shot capability (e.g.
+// an in-process test stub).
+func (d *Daemon) runTaskViaSupervisor(ctx context.Context, command, workDir string, env []string, logFile string) (int, error) {
+	if r, ok := d.Sup.(interface {
+		RunOnce(supervisor.ServiceSpec) (int, error)
+	}); ok {
+		return r.RunOnce(supervisor.ServiceSpec{
+			Command: command,
+			WorkDir: workDir,
+			Env:     env,
+			LogFile: logFile,
+		})
+	}
+	return execTask(ctx, command, workDir, env, logFile)
+}
+
+// execTask is the fallback taskRunFn: sh -c in workDir, output appended to logFile.
 func execTask(ctx context.Context, command, workDir string, env []string, logFile string) (int, error) {
 	if err := os.MkdirAll(filepath.Dir(logFile), 0o755); err != nil {
 		return -1, err

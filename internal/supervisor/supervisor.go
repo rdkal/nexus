@@ -73,6 +73,22 @@ func (s *Supervisor) Spawn(name string, spec ServiceSpec) {
 	go s.loop(name, spec, e)
 }
 
+// RunOnce runs a command to completion and returns its exit code. Unlike Spawn it
+// does not supervise, restart, or track the process — it is for one-shot tasks. It
+// blocks until the command exits. (exitCode, nil) is returned for both zero and
+// non-zero exits; err indicates a system-level failure to start or wait.
+func (s *Supervisor) RunOnce(spec ServiceSpec) (int, error) {
+	runner := s.Runner
+	if runner == nil {
+		runner = &OSRunner{}
+	}
+	proc, err := runner.Start(spec)
+	if err != nil {
+		return -1, err
+	}
+	return proc.Wait()
+}
+
 // Stop gracefully stops the named service.
 // Sends SIGTERM, waits up to GracePeriod, then SIGKILL.
 // Blocks until the service goroutine exits. No-op if not running.

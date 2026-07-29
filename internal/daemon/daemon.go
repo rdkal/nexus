@@ -101,14 +101,15 @@ func New(database *db.DB, sup SupervisorAPI, paths home.Paths) *Daemon {
 	if v, ok := os.LookupEnv("NEXUS_SELF_SPEC"); ok {
 		selfSpec = v // may be empty, which disables self-update restarts
 	}
-	return &Daemon{
+	d := &Daemon{
 		DB:           database,
 		Sup:          sup,
 		Paths:        paths,
 		SelfSpecPath: selfSpec,
-		runTask:      execTask,
 		projects:     make(map[string]*projectState),
 	}
+	d.runTask = d.runTaskViaSupervisor
+	return d
 }
 
 // Run loads all root projects from the DB, recovers any previously running services

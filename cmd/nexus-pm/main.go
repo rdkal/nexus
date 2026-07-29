@@ -83,6 +83,7 @@ func (s *pmServer) serve(ctx context.Context, paths home.Paths) error {
 	mux.HandleFunc("POST /services/{key...}", s.handleSpawn)
 	mux.HandleFunc("DELETE /services/{key...}", s.handleStop)
 	mux.HandleFunc("GET /services/{key...}", s.handleStatus)
+	mux.HandleFunc("POST /run", s.handleRun)
 	mux.HandleFunc("POST /runtime/restart", s.handleRuntimeRestart)
 
 	httpSrv := &http.Server{Handler: mux}
@@ -121,6 +122,27 @@ func (s *pmServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(st)
+}
+
+// handleRun runs a one-shot command (a task) to completion and returns its exit
+// code. The request blocks for the command's whole duration. Because the process
+// is a child of nexus-pm — not the nexus runtime — it survives a runtime restart.
+func (s *pmServer) handleRun(w http.ResponseWriter, r *http.Request) {
+	var spec supervisor.ServiceSpec
+	if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	exit, err := s.sup.RunOnce(spec)
+	resp := struct {
+		ExitCode int    `json:"exit_code"`
+		Error    string `json:"error,omitempty"`
+	}{ExitCode: exit}
+	if err != nil {
+		resp.Error = err.Error()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // handleRuntimeRestart stops the nexus runtime and immediately re-spawns it.
