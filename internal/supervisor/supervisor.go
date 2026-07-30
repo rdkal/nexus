@@ -29,6 +29,9 @@ type Supervisor struct {
 
 	mu   sync.Mutex
 	svcs map[string]*svcEntry
+
+	runsMu sync.Mutex
+	runs   map[string]*taskRun // one-shot task runs, keyed by run id
 }
 
 // Status is a snapshot of a service's current state.

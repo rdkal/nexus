@@ -246,6 +246,34 @@ func (d *DB) FinishTaskRun(id int64, status string, exitCode int, finishedAt tim
 	return nil
 }
 
+// HasRunningTaskRun reports whether a task currently has a run in progress —
+// used to enforce no self-overlap (survives restarts, unlike an in-memory flag).
+func (d *DB) HasRunningTaskRun(address, task string) (bool, error) {
+	var n int
+	err := d.conn.QueryRow(
+		`SELECT COUNT(*) FROM task_runs WHERE address = ? AND task = ? AND status = 'running'`,
+		address, task,
+	).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("has running task run: %w", err)
+	}
+	return n > 0, nil
+}
+
+// RunningTaskRuns returns every task run still marked 'running' — the runtime
+// polls nexus-pm for each on startup to finalise runs it kicked off before a restart.
+func (d *DB) RunningTaskRuns() ([]TaskRun, error) {
+	rows, err := d.conn.Query(
+		`SELECT id, address, task, reason, status, exit_code, started_at, finished_at
+		 FROM task_runs WHERE status = 'running' ORDER BY id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("running task runs: %w", err)
+	}
+	defer rows.Close()
+	return scanTaskRuns(rows)
+}
+
 // ListTaskRuns returns up to limit runs for a project, newest first.
 func (d *DB) ListTaskRuns(address string, limit int) ([]TaskRun, error) {
 	rows, err := d.conn.Query(
@@ -257,7 +285,10 @@ func (d *DB) ListTaskRuns(address string, limit int) ([]TaskRun, error) {
 		return nil, fmt.Errorf("list task runs: %w", err)
 	}
 	defer rows.Close()
+	return scanTaskRuns(rows)
+}
 
+func scanTaskRuns(rows *sql.Rows) ([]TaskRun, error) {
 	var out []TaskRun
 	for rows.Next() {
 		var r TaskRun

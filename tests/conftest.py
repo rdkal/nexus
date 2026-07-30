@@ -311,6 +311,14 @@ class NexusFixture:
                 self._pm_proc.kill()
                 self._pm_proc.wait()
 
+    def kill_runtime(self):
+        """Kill just the nexus runtime process (leaving nexus-pm running, which
+        restarts it) — the equivalent of a self-update runtime restart."""
+        subprocess.run(
+            ["pkill", "-9", "-f", f"{self._bin_dir / 'nexus'} daemon"],
+            check=False,
+        )
+
     def wait_for_socket(self, timeout: float = 15.0):
         """Block until nexus.sock exists and accepts connections."""
         sock_path = str(self._home / "nexus.sock")

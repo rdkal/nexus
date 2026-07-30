@@ -83,6 +83,9 @@ func (s *pmServer) serve(ctx context.Context, paths home.Paths) error {
 	mux.HandleFunc("POST /services/{key...}", s.handleSpawn)
 	mux.HandleFunc("DELETE /services/{key...}", s.handleStop)
 	mux.HandleFunc("GET /services/{key...}", s.handleStatus)
+	mux.HandleFunc("POST /run/{id}", s.handleRunStart)
+	mux.HandleFunc("GET /run/{id}", s.handleRunPoll)
+	mux.HandleFunc("DELETE /run/{id}", s.handleRunAck)
 	mux.HandleFunc("POST /runtime/restart", s.handleRuntimeRestart)
 
 	httpSrv := &http.Server{Handler: mux}
@@ -121,6 +124,47 @@ func (s *pmServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(st)
+}
+
+// handleRunStart starts a one-shot task run keyed by id and returns immediately.
+// The process is a child of nexus-pm — not the nexus runtime — so it survives a
+// runtime restart; the runtime learns the outcome by polling GET /run/{id}.
+func (s *pmServer) handleRunStart(w http.ResponseWriter, r *http.Request) {
+	var spec supervisor.ServiceSpec
+	if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.sup.StartRun(r.PathValue("id"), spec); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// handleRunPoll reports a run's state: 404 if unknown, else {status, exit_code, error}.
+func (s *pmServer) handleRunPoll(w http.ResponseWriter, r *http.Request) {
+	state, known, _ := s.sup.PollRun(r.PathValue("id"))
+	if !known {
+		http.Error(w, "run not found", http.StatusNotFound)
+		return
+	}
+	status := "running"
+	if state.Done {
+		status = "done"
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Status   string `json:"status"`
+		ExitCode int    `json:"exit_code"`
+		Error    string `json:"error,omitempty"`
+	}{Status: status, ExitCode: state.ExitCode, Error: state.Err})
+}
+
+// handleRunAck drops a run record once the runtime has recorded its outcome.
+func (s *pmServer) handleRunAck(w http.ResponseWriter, r *http.Request) {
+	s.sup.AckRun(r.PathValue("id"))
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleRuntimeRestart stops the nexus runtime and immediately re-spawns it.

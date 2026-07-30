@@ -10,7 +10,11 @@ import time
 
 
 def _runs(nexus, address):
-    runs = nexus.client.list_task_runs(address)
+    # Tolerate transient socket errors while the runtime is restarting.
+    try:
+        runs = nexus.client.list_task_runs(address)
+    except Exception:
+        return []
     return runs if isinstance(runs, list) else []
 
 
@@ -96,3 +100,39 @@ def test_manual_trigger(nexus, git_repo):
     nexus.cli("task", "run", "app/greet")
     run = _wait_run(nexus, "app", "greet", status="success")
     assert run and run["reason"] == "manual", f"manual run wrong: {run}"
+
+
+SURVIVE_YAML = """\
+tasks:
+  long:
+    run: sh -c 'sleep 6; echo done'
+  after_long:
+    after: long
+    run: sh -c 'true'
+"""
+
+
+def test_task_survives_runtime_restart(nexus, git_repo):
+    # A task runs under nexus-pm, so killing the nexus runtime mid-task must NOT
+    # kill it — and the new runtime must recover its outcome and fire the cascade.
+    git_repo.commit({"nexus.yaml": SURVIVE_YAML})
+    nexus.add_project(git_repo.spec_path, "app")
+    nexus.start(poll_interval="2s")
+    nexus.wait_for_socket()
+    nexus.wait_for_sha("app")
+
+    # Start the long task, then kill the runtime while it's still sleeping.
+    nexus.client.run_task("app", "long")
+    assert _wait_run(nexus, "app", "long"), "long task did not start"
+    time.sleep(1)
+    nexus.kill_runtime()
+
+    # nexus-pm restarts the runtime; wait for the socket to come back.
+    nexus.wait_for_socket()
+
+    # The new runtime recovers the in-flight run: long finishes success and its
+    # after: dependent fires — all across the restart.
+    long_run = _wait_run(nexus, "app", "long", status="success", timeout=30)
+    assert long_run, "long task was not recovered as success after runtime restart"
+    after = _wait_run(nexus, "app", "after_long", status="success", timeout=20)
+    assert after and after["reason"] == "after:long", f"cascade did not survive restart: {after}"
