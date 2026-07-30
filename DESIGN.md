@@ -679,13 +679,26 @@ undefined `${VAR}`.
 
 **Process ownership** follows the three-process split (see Self-Update): the `nexus` runtime
 owns the *scheduling* (computing the next fire and reacting to completions), while the fired
-command is run **under nexus-pm** — a one-shot `POST /run` on `nexus-pm.sock` that starts the
-process, captures its output to `logs/<address>/tasks/<task>/current.log`, and blocks until it
-returns the exit code. Because nexus-pm (not the runtime) owns the process, a task keeps
-running even if the runtime restarts mid-task — the same reason user services survive a
-self-update. Unlike a service it is not restarted on exit; its exit code drives the `after:`
-cascade and is recorded in `task_runs`. (If the runtime restarts mid-task the process still
-completes, but that run's exit code is lost to the runtime.)
+command runs **under nexus-pm**, so a task keeps running even if the runtime restarts mid-task
+— the same reason user services survive a self-update. Unlike a service it is not restarted on
+exit; its exit code drives the `after:` cascade and is recorded in `task_runs`.
+
+The runtime does **not** block on the run — it uses a poll-and-recover protocol keyed by the
+`task_runs` row id, so an outcome is never lost across a restart:
+
+1. Runtime records a `running` row (id `N`), then `POST /run/N` (spec) to nexus-pm, which
+   starts the process, captures output to `logs/<address>/tasks/<task>/current.log`, and
+   returns immediately.
+2. Runtime polls `GET /run/N` until the run is `done`, then finalises the row
+   (`success`/`failed` + exit code), `DELETE /run/N` to release it, and fires `after:`
+   dependents on success.
+3. On **startup**, the runtime re-polls every row still marked `running` — a task that kept
+   running under nexus-pm across the restart is finalised and its cascade fired, rather than
+   left dangling. (If nexus-pm has no record of the run — e.g. the whole stack restarted, so
+   the process is gone — that run is marked `failed`.)
+
+No self-overlap is enforced against the DB (a task with a `running` row won't fire again), so
+it holds across restarts too.
 
 ### Designed soon
 
@@ -932,7 +945,9 @@ The process manager API is used exclusively by the nexus runtime:
 POST   /services/{key}      spawn a service (no-op if already running)
 DELETE /services/{key}      stop a service (blocks until exited)
 GET    /services/{key}      service status
-POST   /run                 run a one-shot task to completion; returns its exit code
+POST   /run/{id}            start a one-shot task run (returns immediately)
+GET    /run/{id}            poll a run's state {status, exit_code, error}
+DELETE /run/{id}            release a finished run once its outcome is recorded
 POST   /runtime/restart     stop and restart the nexus runtime binary
 ```
 

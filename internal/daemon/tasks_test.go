@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,26 +11,69 @@ import (
 	"github.com/rdkal/nexus/internal/db"
 	"github.com/rdkal/nexus/internal/home"
 	"github.com/rdkal/nexus/internal/poller"
+	"github.com/rdkal/nexus/internal/supervisor"
 )
 
-func taskName(env []string) string {
-	for _, e := range env {
-		if v, ok := strings.CutPrefix(e, "NEXUS_TASK="); ok {
-			return v
-		}
-	}
-	return ""
+// fakeExec is an in-test taskExecutor: StartRun records the run and blocks its
+// completion until the test calls complete(id, exit).
+type fakeExec struct {
+	mu      sync.Mutex
+	done    map[string]supervisor.RunState
+	live    map[string]bool
+	started chan string
 }
 
-func newTaskTestDaemon(t *testing.T) (*Daemon, string) {
+func newFakeExec() *fakeExec {
+	return &fakeExec{done: map[string]supervisor.RunState{}, live: map[string]bool{}, started: make(chan string, 32)}
+}
+
+func (f *fakeExec) StartRun(id string, _ supervisor.ServiceSpec) error {
+	f.mu.Lock()
+	f.live[id] = true
+	f.mu.Unlock()
+	f.started <- id
+	return nil
+}
+
+func (f *fakeExec) PollRun(id string) (supervisor.RunState, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.live[id] {
+		return supervisor.RunState{}, false, nil
+	}
+	if st, ok := f.done[id]; ok {
+		return st, true, nil
+	}
+	return supervisor.RunState{Done: false}, true, nil
+}
+
+func (f *fakeExec) AckRun(id string) {
+	f.mu.Lock()
+	delete(f.live, id)
+	delete(f.done, id)
+	f.mu.Unlock()
+}
+
+func (f *fakeExec) complete(id string, exit int) {
+	f.mu.Lock()
+	f.done[id] = supervisor.RunState{Done: true, ExitCode: exit}
+	f.mu.Unlock()
+}
+
+func newTaskTestDaemon(t *testing.T) (*Daemon, *fakeExec, string) {
 	t.Helper()
+	taskPollInterval = 5 * time.Millisecond
 	dir := t.TempDir()
 	database, err := db.Open(filepath.Join(dir, "nexus.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { database.Close() })
-	return New(database, plainSup{}, home.NewPaths(dir)), dir
+	d := New(database, plainSup{}, home.NewPaths(dir))
+	fe := newFakeExec()
+	d.taskExec = fe
+	d.ctx = context.Background()
+	return d, fe, dir
 }
 
 func injectTaskProject(d *Daemon, dir string, cfg *config.ProjectFile) *projectState {
@@ -42,25 +84,33 @@ func injectTaskProject(d *Daemon, dir string, cfg *config.ProjectFile) *projectS
 	return ps
 }
 
-func TestTaskAfterCascade_StopsOnFailure(t *testing.T) {
-	d, dir := newTaskTestDaemon(t)
-
-	var mu sync.Mutex
-	var order []string
-	done := make(chan string, 16)
-	d.runTask = func(ctx context.Context, cmd, wd string, env []string, log string) (int, error) {
-		name := taskName(env)
-		mu.Lock()
-		order = append(order, name)
-		mu.Unlock()
-		exit := 0
-		if cmd == "fail" {
-			exit = 1
-		}
-		done <- name
-		return exit, nil
+// nextStart waits for the next run to start and returns its id.
+func nextStart(t *testing.T, fe *fakeExec) string {
+	t.Helper()
+	select {
+	case id := <-fe.started:
+		return id
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for a task run to start")
+		return ""
 	}
+}
 
+func tasksByName(t *testing.T, d *Daemon) map[string]db.TaskRun {
+	t.Helper()
+	runs, err := d.DB.ListTaskRuns("app", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]db.TaskRun{}
+	for _, r := range runs {
+		out[r.Task] = r
+	}
+	return out
+}
+
+func TestTaskAfterCascade_StopsOnFailure(t *testing.T) {
+	d, fe, dir := newTaskTestDaemon(t)
 	cfg := &config.ProjectFile{Tasks: map[string]config.Task{
 		"a":     {Run: "ok"},
 		"b":     {Run: "ok", After: "a"},
@@ -71,73 +121,94 @@ func TestTaskAfterCascade_StopsOnFailure(t *testing.T) {
 	ps := injectTaskProject(d, dir, cfg)
 	d.startTasks(context.Background(), ps)
 
-	// Firing a cascades a → b → c.
+	// a → b → c: three successful runs in sequence.
 	if err := d.triggerTask("app", "a"); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
-		select {
-		case <-done:
-		case <-time.After(3 * time.Second):
-			t.Fatalf("timeout waiting for cascade; got %v", order)
+		fe.complete(nextStart(t, fe), 0)
+	}
+	// Wait for c to be recorded.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if r, ok := tasksByName(t, d)["c"]; ok && r.Status == "success" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	got := tasksByName(t, d)
+	for _, n := range []string{"a", "b", "c"} {
+		if got[n].Status != "success" {
+			t.Errorf("%s status = %q, want success", n, got[n].Status)
 		}
 	}
-	mu.Lock()
-	got := strings.Join(order, ",")
-	mu.Unlock()
-	if got != "a,b,c" {
-		t.Errorf("cascade order = %q, want a,b,c", got)
+	if got["b"].Reason != "after:a" || got["c"].Reason != "after:b" {
+		t.Errorf("cascade reasons wrong: b=%q c=%q", got["b"].Reason, got["c"].Reason)
 	}
 
-	// Firing boom (which fails) must NOT run its dependent.
+	// boom fails → its dependent never runs.
 	if err := d.triggerTask("app", "boom"); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-done: // boom itself
-	case <-time.After(3 * time.Second):
-		t.Fatal("timeout waiting for boom")
-	}
-	time.Sleep(200 * time.Millisecond) // give a wrong cascade time to (not) happen
-	mu.Lock()
-	defer mu.Unlock()
-	for _, n := range order {
-		if n == "never" {
-			t.Errorf("dependent of a failed task ran: %v", order)
-		}
+	fe.complete(nextStart(t, fe), 1)
+	time.Sleep(150 * time.Millisecond)
+	if _, ran := tasksByName(t, d)["never"]; ran {
+		t.Error("dependent of a failed task ran")
 	}
 }
 
 func TestTaskNoSelfOverlap(t *testing.T) {
-	d, dir := newTaskTestDaemon(t)
-
-	release := make(chan struct{})
-	started := make(chan struct{}, 4)
-	var runs int
-	var mu sync.Mutex
-	d.runTask = func(ctx context.Context, cmd, wd string, env []string, log string) (int, error) {
-		mu.Lock()
-		runs++
-		mu.Unlock()
-		started <- struct{}{}
-		<-release // block until the test releases
-		return 0, nil
-	}
-
+	d, fe, dir := newTaskTestDaemon(t)
 	cfg := &config.ProjectFile{Tasks: map[string]config.Task{"slow": {Run: "ok"}}}
 	ps := injectTaskProject(d, dir, cfg)
 	d.startTasks(context.Background(), ps)
 
-	_ = d.triggerTask("app", "slow") // first run — blocks in runTask
-	<-started
-	_ = d.triggerTask("app", "slow") // second — should be skipped (already running)
-	time.Sleep(200 * time.Millisecond)
+	_ = d.triggerTask("app", "slow") // first run — left in progress (not completed)
+	id := nextStart(t, fe)
 
-	close(release)
-	time.Sleep(200 * time.Millisecond)
-	mu.Lock()
-	defer mu.Unlock()
-	if runs != 1 {
-		t.Errorf("overlapping fire ran %d times, want 1", runs)
+	_ = d.triggerTask("app", "slow") // second — must be skipped (one already running)
+	select {
+	case <-fe.started:
+		t.Fatal("overlapping run started")
+	case <-time.After(150 * time.Millisecond):
 	}
+	fe.complete(id, 0) // let the first finish
+}
+
+func TestRecoverTaskRuns(t *testing.T) {
+	d, fe, dir := newTaskTestDaemon(t)
+	cfg := &config.ProjectFile{Tasks: map[string]config.Task{
+		"long": {Run: "ok"},
+		"next": {Run: "ok", After: "long"},
+	}}
+	ps := injectTaskProject(d, dir, cfg)
+	d.startTasks(context.Background(), ps)
+
+	// Simulate a run that was in-flight when the runtime last stopped: a 'running'
+	// task_runs row for `long`, already finished (exit 0) under nexus-pm.
+	id, err := d.DB.AddTaskRun("app", "long", "schedule", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fe.mu.Lock()
+	fe.live[runKey(id)] = true
+	fe.done[runKey(id)] = supervisor.RunState{Done: true, ExitCode: 0}
+	fe.mu.Unlock()
+
+	d.recoverTaskRuns()
+
+	// long is finalised success, and its after: dependent fires and runs.
+	nextID := nextStart(t, fe) // `next` starting
+	fe.complete(nextID, 0)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		g := tasksByName(t, d)
+		if g["long"].Status == "success" && g["next"].Status == "success" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	g := tasksByName(t, d)
+	t.Fatalf("recovery incomplete: long=%q next=%q", g["long"].Status, g["next"].Status)
 }

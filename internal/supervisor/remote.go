@@ -75,32 +75,51 @@ func (r *RemoteSupervisor) Status(name string) (Status, bool) {
 	return st, true
 }
 
-// RunOnce asks nexus-pm to run a one-shot command to completion and returns its
-// exit code. It blocks for the command's whole duration. Because nexus-pm (not the
-// runtime) owns the process, the command keeps running even if the runtime
-// restarts mid-task — though in that case its exit code is lost to the runtime.
-func (r *RemoteSupervisor) RunOnce(spec ServiceSpec) (int, error) {
+// StartRun asks nexus-pm to start a one-shot task run keyed by id. Non-blocking:
+// nexus-pm owns the process, so it survives a runtime restart. Poll for the outcome.
+func (r *RemoteSupervisor) StartRun(id string, spec ServiceSpec) error {
 	body, _ := json.Marshal(spec)
-	resp, err := r.client.Post("http://nexus-pm/run", "application/json", bytes.NewReader(body))
+	resp, err := r.client.Post("http://nexus-pm/run/"+id, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return -1, fmt.Errorf("run: %w", err)
+		return fmt.Errorf("start run %s: %w", id, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(resp.Body)
-		return -1, fmt.Errorf("run: %s", strings.TrimSpace(string(b)))
+		return fmt.Errorf("start run %s: %s", id, strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
+// PollRun queries a run's state from nexus-pm. known is false only on a definitive
+// 404 (the run is gone); a transport error returns a non-nil err so the caller
+// retries instead of treating a blip as a lost run.
+func (r *RemoteSupervisor) PollRun(id string) (state RunState, known bool, err error) {
+	resp, err := r.client.Get("http://nexus-pm/run/" + id)
+	if err != nil {
+		return RunState{}, true, err // transient: keep waiting
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return RunState{}, false, nil
 	}
 	var out struct {
+		Status   string `json:"status"`
 		ExitCode int    `json:"exit_code"`
 		Error    string `json:"error"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return -1, fmt.Errorf("run: decode response: %w", err)
+		return RunState{}, true, err
 	}
-	if out.Error != "" {
-		return out.ExitCode, fmt.Errorf("%s", out.Error)
+	return RunState{Done: out.Status == "done", ExitCode: out.ExitCode, Err: out.Error}, true, nil
+}
+
+// AckRun tells nexus-pm the run outcome has been recorded and can be dropped.
+func (r *RemoteSupervisor) AckRun(id string) {
+	req, _ := http.NewRequest(http.MethodDelete, "http://nexus-pm/run/"+id, nil)
+	if resp, err := r.client.Do(req); err == nil {
+		resp.Body.Close()
 	}
-	return out.ExitCode, nil
 }
 
 // RestartRuntime asks nexus-pm to stop and restart the nexus runtime binary.

@@ -57,8 +57,9 @@ type Daemon struct {
 
 	reconcileMu sync.Mutex // serialises reconcileRoots
 
-	// runTask executes a task's command. Injectable for tests; defaults to execTask.
-	runTask taskRunFn
+	// taskExec runs one-shot task commands out-of-process (nexus-pm). Set from Sup
+	// when it supports it; injectable in tests. Nil disables task execution.
+	taskExec taskExecutor
 
 	mu sync.RWMutex
 	// projects holds every live project keyed by resource address. This includes
@@ -108,7 +109,10 @@ func New(database *db.DB, sup SupervisorAPI, paths home.Paths) *Daemon {
 		SelfSpecPath: selfSpec,
 		projects:     make(map[string]*projectState),
 	}
-	d.runTask = d.runTaskViaSupervisor
+	// Tasks run through the supervisor's one-shot run API (nexus-pm in production).
+	if te, ok := sup.(taskExecutor); ok {
+		d.taskExec = te
+	}
 	return d
 }
 
@@ -134,6 +138,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// sibling's cross-project volume var may have been skipped. Now that every
 	// project is recovered, re-spawn any that were skipped.
 	d.retryIncompleteRecoveries()
+	// Resume polling for any task run left in-flight when the runtime last stopped
+	// (it kept running under nexus-pm across the restart).
+	d.recoverTaskRuns()
 	return d.serve(ctx)
 }
 
