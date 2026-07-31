@@ -73,6 +73,21 @@ latest     the newest semver tag
 web-v*     newest tag matching a glob — one app in a monorepo
 """
 
+TASKS_YAML = """\
+tasks:
+  # A one-shot command. Trigger it on a schedule, after another task, or by hand.
+  backup:
+    schedule: "@daily"        # cron, "@every 15m", "@hourly"/"@daily" (UTC)
+    run: ./backup.sh
+
+  notify:
+    after: backup             # runs when backup succeeds; a failure stops the chain
+    run: ./notify.sh
+
+  migrate:
+    run: ./migrate.sh         # no trigger -> manual only (nexus task run app/migrate)
+"""
+
 WEB_UI = """\
 nexus project add github.com/rdkal/nexus/web
 """
@@ -176,6 +191,32 @@ def page():
                     ".",
                 ],
                 code(REFS),
+                h.h2["Tasks"],
+                h.p[
+                    "Alongside long-running services, a project can define ",
+                    h.strong["tasks"],
+                    " — one-shot commands that run in the current deployment, with the same "
+                    "environment and volumes. A task is triggered on a ",
+                    h.code["schedule:"],
+                    " (cron or ",
+                    h.code["@every"],
+                    "/",
+                    h.code["@daily"],
+                    "), ",
+                    h.code["after:"],
+                    " another task succeeds (a failure stops the chain), or manually with ",
+                    h.code["nexus task run <project>/<task>"],
+                    ".",
+                ],
+                code(TASKS_YAML),
+                h.p[
+                    "Every run is recorded with its outcome. The dashboard lists a project's "
+                    "tasks with each one's trigger and last-run status, and a ",
+                    h.strong["Run"],
+                    " button — which reads ",
+                    h.strong["Retry"],
+                    " on a task whose last run failed, so you can re-run it with one click.",
+                ],
                 h.h2["Environment variables"],
                 h.p[
                     "Set variables at three levels — project-wide (build and every service), "
