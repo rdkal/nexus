@@ -64,15 +64,43 @@ func TestParseLsRemoteLatest(t *testing.T) {
 	}
 }
 
-func TestParseLsRemoteLatest_SkipsPeeled(t *testing.T) {
-	// Annotated tags emit two lines: the tag-object SHA and the ^{} peeled commit SHA.
+func TestParseLsRemoteLatest_PrefersPeeledCommit(t *testing.T) {
+	// Annotated tags emit two lines: the tag-object SHA and the ^{} peeled commit
+	// SHA. We must resolve to a commit (git worktree add rejects a tag object),
+	// so the peeled line wins regardless of which line comes first.
 	out := "tag-sha\trefs/tags/v1.0.0\ncommit-sha\trefs/tags/v1.0.0^{}\n"
 	sha, err := git.ParseLsRemoteLatest(out)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if sha != "tag-sha" {
-		t.Errorf("got %q, want tag-sha", sha)
+	if sha != "commit-sha" {
+		t.Errorf("got %q, want commit-sha", sha)
+	}
+}
+
+func TestParseLsRemoteLatest_PrefersPeeledCommit_PeeledLineFirst(t *testing.T) {
+	// Real `git ls-remote --sort=-version:refname` output orders the peeled
+	// line before the plain tag line (unlike the fixture above) — must not
+	// depend on line order.
+	out := "commit-sha\trefs/tags/v1.0.0^{}\ntag-sha\trefs/tags/v1.0.0\n"
+	sha, err := git.ParseLsRemoteLatest(out)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sha != "commit-sha" {
+		t.Errorf("got %q, want commit-sha", sha)
+	}
+}
+
+func TestParseLsRemoteLatest_LightweightTag(t *testing.T) {
+	// A lightweight tag has no ^{} peeled line; its plain SHA is already a commit.
+	out := "commit-sha\trefs/tags/v1.0.0\n"
+	sha, err := git.ParseLsRemoteLatest(out)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sha != "commit-sha" {
+		t.Errorf("got %q, want commit-sha", sha)
 	}
 }
 
