@@ -260,6 +260,38 @@ func (d *DB) HasRunningTaskRun(address, task string) (bool, error) {
 	return n > 0, nil
 }
 
+// LastTaskRunID returns the id of a task's most recent run (any status), or 0 if
+// it has never run. Used as the watermark for a fan-in join: a parent's success
+// only counts toward the next join fire if it is newer than this.
+func (d *DB) LastTaskRunID(address, task string) (int64, error) {
+	var id sql.NullInt64
+	err := d.conn.QueryRow(
+		`SELECT MAX(id) FROM task_runs WHERE address = ? AND task = ?`, address, task,
+	).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("last task run id: %w", err)
+	}
+	if !id.Valid {
+		return 0, nil
+	}
+	return id.Int64, nil
+}
+
+// HasSuccessfulTaskRunAfter reports whether a task has a successful run with an id
+// greater than afterID — i.e. a "fresh" success not yet consumed by a join that
+// last ran at afterID.
+func (d *DB) HasSuccessfulTaskRunAfter(address, task string, afterID int64) (bool, error) {
+	var n int
+	err := d.conn.QueryRow(
+		`SELECT COUNT(*) FROM task_runs WHERE address = ? AND task = ? AND status = 'success' AND id > ?`,
+		address, task, afterID,
+	).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("has successful task run after: %w", err)
+	}
+	return n > 0, nil
+}
+
 // RunningTaskRuns returns every task run still marked 'running' — the runtime
 // polls nexus-pm for each on startup to finalise runs it kicked off before a restart.
 func (d *DB) RunningTaskRuns() ([]TaskRun, error) {

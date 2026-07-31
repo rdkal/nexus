@@ -6,7 +6,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/rdkal/nexus/internal/config"
@@ -44,14 +47,15 @@ type taskScheduler struct {
 	tasks      map[string]config.Task
 	afterOf    map[string][]string // task name → tasks triggered by its success
 
-	ctx context.Context // set in start; used by manual triggers
+	fireMu sync.Mutex      // serialises claim-a-run so parents can't double-fire a join
+	ctx    context.Context // set in start; used by manual triggers
 }
 
 func (d *Daemon) newTaskScheduler(ps *projectState, cfg *config.ProjectFile) *taskScheduler {
 	afterOf := make(map[string][]string)
 	for name, t := range cfg.Tasks {
-		if t.After != "" {
-			afterOf[t.After] = append(afterOf[t.After], name)
+		for _, parent := range t.After {
+			afterOf[parent] = append(afterOf[parent], name)
 		}
 	}
 	return &taskScheduler{
@@ -98,34 +102,95 @@ func (s *taskScheduler) scheduleLoop(ctx context.Context, name string, sched cro
 			timer.Stop()
 			return
 		case <-timer.C:
-			s.fire(ctx, name, "schedule")
+			s.launch(ctx, name, "schedule")
 		}
 	}
 }
 
-// fire starts a task run unless one is already in progress for that task (no
-// self-overlap, checked against the DB so it holds across restarts).
-func (s *taskScheduler) fire(ctx context.Context, name, reason string) {
+// launch claims a run slot for a task (no self-overlap, atomic under fireMu so it
+// holds against concurrent triggers) and runs it. A no-op if a run is already in
+// progress for that task — enforced against the DB, so it survives restarts.
+func (s *taskScheduler) launch(ctx context.Context, name, reason string) {
 	if ctx.Err() != nil {
 		return
 	}
+	s.fireMu.Lock()
+	id, ok := s.claimLocked(name, reason)
+	s.fireMu.Unlock()
+	if ok {
+		go s.d.runTask(s, name, id)
+	}
+}
+
+// claimLocked records a 'running' task_runs row unless one already exists for the
+// task, returning the new run id. The caller must hold fireMu; checking and
+// inserting under the same lock is what makes concurrent triggers (e.g. two
+// parents of a join finishing together) claim at most one run.
+func (s *taskScheduler) claimLocked(name, reason string) (int64, bool) {
 	running, err := s.d.DB.HasRunningTaskRun(s.address, name)
 	if err != nil {
 		slog.Error("task: overlap check failed", "task", s.key(name), "err", err)
-		return
+		return 0, false
 	}
 	if running {
 		slog.Warn("task: previous run still active; skipping", "task", s.key(name), "reason", reason)
+		return 0, false
+	}
+	id, err := s.d.DB.AddTaskRun(s.address, name, reason, time.Now())
+	if err != nil {
+		slog.Error("task: could not record run", "task", s.key(name), "err", err)
+		return 0, false
+	}
+	return id, true
+}
+
+// fireJoin fires a fan-in join (a task with several after: parents) only when the
+// barrier is satisfied: every parent has a successful run newer than the join's
+// own last run. Re-evaluated under fireMu against the freshly-claimed run id, so
+// two parents finishing at once fire the join exactly once and each parent
+// success is consumed by the fire it completes.
+func (s *taskScheduler) fireJoin(ctx context.Context, dep string, parents []string) {
+	if ctx.Err() != nil {
 		return
 	}
-	go s.d.startTaskRun(s, name, reason)
+	s.fireMu.Lock()
+	defer s.fireMu.Unlock()
+
+	last, err := s.d.DB.LastTaskRunID(s.address, dep)
+	if err != nil {
+		slog.Error("task: join watermark lookup failed", "task", s.key(dep), "err", err)
+		return
+	}
+	for _, p := range parents {
+		ready, err := s.d.DB.HasSuccessfulTaskRunAfter(s.address, p, last)
+		if err != nil {
+			slog.Error("task: join readiness check failed", "task", s.key(dep), "parent", p, "err", err)
+			return
+		}
+		if !ready {
+			return // a parent has no fresh success yet — barrier not met
+		}
+	}
+	reason := joinReason(parents)
+	id, ok := s.claimLocked(dep, reason)
+	if ok {
+		go s.d.runTask(s, dep, id)
+	}
+}
+
+// joinReason renders a join's trigger reason deterministically, e.g. "after:a,b".
+func joinReason(parents []string) string {
+	ps := append([]string(nil), parents...)
+	sort.Strings(ps)
+	return "after:" + strings.Join(ps, ",")
 }
 
 func (s *taskScheduler) key(name string) string { return s.address + "/" + name }
 
-// startTaskRun resolves the task's environment, records a run, and hands the
-// command to nexus-pm; it then awaits the outcome by polling.
-func (d *Daemon) startTaskRun(s *taskScheduler, name, reason string) {
+// runTask resolves the (already-claimed) run's environment and hands the command
+// to nexus-pm, then awaits the outcome by polling. The task_runs row (id) was
+// recorded by claimLocked; any early failure finalises it as failed.
+func (d *Daemon) runTask(s *taskScheduler, name string, id int64) {
 	task := s.tasks[name]
 	logFile := d.Paths.TaskLog(s.address, name)
 
@@ -143,19 +208,12 @@ func (d *Daemon) startTaskRun(s *taskScheduler, name, reason string) {
 	})
 	if err != nil {
 		_ = appendLine(logFile, "task environment error: "+err.Error())
-		if id, aerr := d.DB.AddTaskRun(s.address, name, reason, time.Now()); aerr == nil {
-			_ = d.DB.FinishTaskRun(id, "failed", -1, time.Now())
-		}
+		_ = d.DB.FinishTaskRun(id, "failed", -1, time.Now())
 		slog.Error("task: environment could not be resolved", "task", s.key(name), "err", err)
 		return
 	}
 	env = append(env, "NEXUS_TASK="+name)
 
-	id, err := d.DB.AddTaskRun(s.address, name, reason, time.Now())
-	if err != nil {
-		slog.Error("task: could not record run", "task", s.key(name), "err", err)
-		return
-	}
 	if d.taskExec == nil {
 		slog.Error("task: no executor configured", "task", s.key(name))
 		_ = d.DB.FinishTaskRun(id, "failed", -1, time.Now())
@@ -167,7 +225,7 @@ func (d *Daemon) startTaskRun(s *taskScheduler, name, reason string) {
 		_ = d.DB.FinishTaskRun(id, "failed", -1, time.Now())
 		return
 	}
-	slog.Info("task: run started", "task", s.key(name), "reason", reason, "id", id)
+	slog.Info("task: run started", "task", s.key(name), "id", id)
 	d.awaitTaskRun(s.address, name, id)
 }
 
@@ -228,7 +286,13 @@ func (d *Daemon) cascadeAfter(address, task string) {
 		return
 	}
 	for _, dep := range s.afterOf[task] {
-		s.fire(s.ctx, dep, "after:"+task)
+		// A single-parent after: fires as soon as its one parent succeeds; a
+		// fan-in join (several parents) fires only once the barrier is met.
+		if parents := s.tasks[dep].After; len(parents) > 1 {
+			s.fireJoin(s.ctx, dep, parents)
+		} else {
+			s.launch(s.ctx, dep, "after:"+task)
+		}
 	}
 }
 
@@ -297,7 +361,7 @@ func (d *Daemon) triggerTask(address, task string) error {
 	if _, ok := s.tasks[task]; !ok {
 		return fmt.Errorf("task %q not found in %q", task, address)
 	}
-	s.fire(s.ctx, task, "manual")
+	s.launch(s.ctx, task, "manual")
 	return nil
 }
 

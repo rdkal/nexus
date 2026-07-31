@@ -53,6 +53,35 @@ def test_scheduled_task_fires_and_cascades(nexus, git_repo):
     assert second and second["reason"] == "after:first", f"cascade run wrong: {second}"
 
 
+FANIN_YAML = """\
+tasks:
+  a:
+    schedule: "@every 2s"
+    run: sh -c 'true'
+  b:
+    schedule: "@every 2s"
+    run: sh -c 'true'
+  joined:
+    after: [a, b]
+    run: sh -c 'true'
+"""
+
+
+def test_fan_in_join_runs_after_all_parents(nexus, git_repo):
+    # `joined` has two parents; it must fire only once both a and b have a fresh
+    # success (the fan-in barrier), and record its trigger as after:a,b.
+    git_repo.commit({"nexus.yaml": FANIN_YAML})
+    nexus.add_project(git_repo.spec_path, "app")
+    nexus.start(poll_interval="2s")
+    nexus.wait_for_socket()
+    nexus.wait_for_sha("app")
+
+    assert _wait_run(nexus, "app", "a", status="success"), "parent a never succeeded"
+    assert _wait_run(nexus, "app", "b", status="success"), "parent b never succeeded"
+    joined = _wait_run(nexus, "app", "joined", status="success", timeout=30)
+    assert joined and joined["reason"] == "after:a,b", f"join run wrong: {joined}"
+
+
 FAILURE_YAML = """\
 tasks:
   boom:

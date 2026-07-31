@@ -374,7 +374,10 @@ tasks:
 	if f.Tasks["fetch"].Schedule != "0 2 * * *" || f.Tasks["fetch"].Run != "./fetch.sh" {
 		t.Errorf("fetch = %+v", f.Tasks["fetch"])
 	}
-	if f.Tasks["transform"].After != "fetch" || f.Tasks["transform"].Environment["MODE"] != "full" {
+	if got := f.Tasks["transform"].After; len(got) != 1 || got[0] != "fetch" {
+		t.Errorf("transform after = %v, want [fetch]", got)
+	}
+	if f.Tasks["transform"].Environment["MODE"] != "full" {
 		t.Errorf("transform = %+v", f.Tasks["transform"])
 	}
 	if err := config.ValidateTasks(f.Tasks); err != nil {
@@ -382,26 +385,56 @@ tasks:
 	}
 }
 
+func TestParseTaskFanIn(t *testing.T) {
+	f, err := config.ParseBytes([]byte(`
+tasks:
+  build:
+    run: ./build.sh
+  test:
+    after: build
+    run: ./test.sh
+  lint:
+    after: build
+    run: ./lint.sh
+  release:
+    after: [test, lint]
+    run: ./release.sh
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.Tasks["release"].After; len(got) != 2 || got[0] != "test" || got[1] != "lint" {
+		t.Errorf("release after = %v, want [test lint]", got)
+	}
+	if err := config.ValidateTasks(f.Tasks); err != nil {
+		t.Errorf("valid fan-in rejected: %v", err)
+	}
+}
+
 func TestValidateTasks(t *testing.T) {
 	cases := map[string]map[string]config.Task{
-		"missing run":      {"a": {Schedule: "@daily"}},
-		"both triggers":    {"a": {Run: "x", Schedule: "@daily", After: "b"}, "b": {Run: "y"}},
-		"unknown after":    {"a": {Run: "x", After: "ghost"}},
-		"self cycle":       {"a": {Run: "x", After: "a"}},
-		"two-node cycle":   {"a": {Run: "x", After: "b"}, "b": {Run: "y", After: "a"}},
+		"missing run":     {"a": {Schedule: "@daily"}},
+		"both triggers":   {"a": {Run: "x", Schedule: "@daily", After: config.AfterList{"b"}}, "b": {Run: "y"}},
+		"unknown after":   {"a": {Run: "x", After: config.AfterList{"ghost"}}},
+		"self cycle":      {"a": {Run: "x", After: config.AfterList{"a"}}},
+		"two-node cycle":  {"a": {Run: "x", After: config.AfterList{"b"}}, "b": {Run: "y", After: config.AfterList{"a"}}},
+		"unknown in join": {"a": {Run: "x", After: config.AfterList{"b", "ghost"}}, "b": {Run: "y"}},
+		"dup parent":      {"a": {Run: "x", After: config.AfterList{"b", "b"}}, "b": {Run: "y"}},
+		"cycle via join":  {"a": {Run: "x", After: config.AfterList{"b", "c"}}, "b": {Run: "y"}, "c": {Run: "z", After: config.AfterList{"a"}}},
 	}
 	for name, tasks := range cases {
 		if err := config.ValidateTasks(tasks); err == nil {
 			t.Errorf("%s: expected error", name)
 		}
 	}
-	// A valid chain passes.
+	// A valid chain and a valid fan-in both pass.
 	ok := map[string]config.Task{
-		"a": {Run: "x", Schedule: "@daily"},
-		"b": {Run: "y", After: "a"},
-		"c": {Run: "z", After: "b"},
+		"a":    {Run: "x", Schedule: "@daily"},
+		"b":    {Run: "y", After: config.AfterList{"a"}},
+		"c":    {Run: "z", After: config.AfterList{"b"}},
+		"join": {Run: "j", After: config.AfterList{"b", "c"}},
 	}
 	if err := config.ValidateTasks(ok); err != nil {
-		t.Errorf("valid chain rejected: %v", err)
+		t.Errorf("valid chain/join rejected: %v", err)
 	}
 }

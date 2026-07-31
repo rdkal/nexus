@@ -84,6 +84,10 @@ tasks:
     after: backup             # runs when backup succeeds; a failure stops the chain
     run: ./notify.sh
 
+  report:
+    after: [backup, notify]   # fan-in join: runs once BOTH have succeeded
+    run: ./report.sh
+
   migrate:
     run: ./migrate.sh         # no trigger -> manual only (nexus task run app/migrate)
 """
@@ -206,7 +210,11 @@ def page():
                     h.code["after:"],
                     " another task succeeds (a failure stops the chain), or manually with ",
                     h.code["nexus task run <project>/<task>"],
-                    ".",
+                    ". Give ",
+                    h.code["after:"],
+                    " a list — ",
+                    h.code["after: [a, b]"],
+                    " — for a fan-in join that runs once all the named tasks have succeeded.",
                 ],
                 code(TASKS_YAML),
                 h.p[

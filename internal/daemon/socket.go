@@ -365,7 +365,7 @@ func (d *Daemon) taskSummaries(address string, cfg *config.ProjectFile) []taskSu
 		ts := taskSummary{
 			Name:     name,
 			Schedule: t.Schedule,
-			After:    t.After,
+			After:    strings.Join(t.After, ", "),
 		}
 		if r, ok := last[name]; ok {
 			ts.LastStatus = r.Status

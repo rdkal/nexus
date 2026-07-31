@@ -189,7 +189,7 @@ func TestHandleGetProject_IncludesTasks(t *testing.T) {
 	cfg := &config.ProjectFile{
 		Tasks: map[string]config.Task{
 			"backup":  {Run: "sh -c true", Schedule: "@daily"},
-			"migrate": {Run: "sh -c false", After: "backup"},
+			"migrate": {Run: "sh -c false", After: config.AfterList{"backup"}},
 			"seed":    {Run: "sh -c true"}, // manual, never run
 		},
 	}
