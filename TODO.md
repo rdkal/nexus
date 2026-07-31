@@ -91,8 +91,8 @@
 | No self-overlap — DB-backed (a task with a `running` row won't fire again), holds across restarts | ✅ | ✅ | ✅ |
 | `task_runs` table — per-run trigger reason (`schedule`/`after:X`/`manual`), start/finish, exit; socket `GET /projects/<addr>/tasks` | ✅ | ✅ | ✅ |
 | Validate `after:` graph at deploy time — unknown task or cycle is a deploy error | ✅ | ✅ | ✅ |
-| **Tasks — designed soon** (specced later; core ships single-parent/on-success first) |
-| Fan-in / joins — `after: [a, b]` (both succeed), incl. run-correlation | | | |
+| Fan-in / joins — `after: [a, b]` runs when all parents succeed; edge-triggered barrier against the join's own last run (no run-correlation table) | ✅ | ✅ | ✅ |
+| **Tasks — designed soon** (specced later) |
 | Failure-mode design — retry-with-policy on a failed task, `on_failure:` triggering a different task, `on: always` edges | | | |
 | Cross-project task triggers (a task in one project triggering one in another) | | | |
 | Web UI for tasks — project detail lists each task with trigger + last-run status, and a manual **Run** / **Retry** (on a failed task) button | ✅ | ✅ | ✅ |

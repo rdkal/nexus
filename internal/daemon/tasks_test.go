@@ -113,10 +113,10 @@ func TestTaskAfterCascade_StopsOnFailure(t *testing.T) {
 	d, fe, dir := newTaskTestDaemon(t)
 	cfg := &config.ProjectFile{Tasks: map[string]config.Task{
 		"a":     {Run: "ok"},
-		"b":     {Run: "ok", After: "a"},
-		"c":     {Run: "ok", After: "b"},
+		"b":     {Run: "ok", After: config.AfterList{"a"}},
+		"c":     {Run: "ok", After: config.AfterList{"b"}},
 		"boom":  {Run: "fail"},
-		"never": {Run: "ok", After: "boom"},
+		"never": {Run: "ok", After: config.AfterList{"boom"}},
 	}}
 	ps := injectTaskProject(d, dir, cfg)
 	d.startTasks(context.Background(), ps)
@@ -157,6 +157,60 @@ func TestTaskAfterCascade_StopsOnFailure(t *testing.T) {
 	}
 }
 
+func TestTaskFanInJoin(t *testing.T) {
+	d, fe, dir := newTaskTestDaemon(t)
+	cfg := &config.ProjectFile{Tasks: map[string]config.Task{
+		"a":    {Run: "ok"},
+		"b":    {Run: "ok"},
+		"join": {Run: "ok", After: config.AfterList{"a", "b"}},
+	}}
+	ps := injectTaskProject(d, dir, cfg)
+	d.startTasks(context.Background(), ps)
+
+	// One parent succeeds: the join must NOT fire (the barrier needs both).
+	if err := d.triggerTask("app", "a"); err != nil {
+		t.Fatal(err)
+	}
+	fe.complete(nextStart(t, fe), 0) // a succeeds
+	select {
+	case id := <-fe.started:
+		t.Fatalf("join fired with only one parent (id %s)", id)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// The second parent succeeds: now the join fires exactly once.
+	if err := d.triggerTask("app", "b"); err != nil {
+		t.Fatal(err)
+	}
+	fe.complete(nextStart(t, fe), 0) // b succeeds
+	fe.complete(nextStart(t, fe), 0) // join runs
+	select {
+	case id := <-fe.started:
+		t.Fatalf("join fired twice for one pair of successes (id %s)", id)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	got := tasksByName(t, d)
+	if got["join"].Status != "success" {
+		t.Fatalf("join status = %q, want success", got["join"].Status)
+	}
+	if got["join"].Reason != "after:a,b" {
+		t.Errorf("join reason = %q, want after:a,b", got["join"].Reason)
+	}
+
+	// Barrier consumed both successes: a succeeding alone must not refire the join
+	// (b has no fresh success past the join's last run).
+	if err := d.triggerTask("app", "a"); err != nil {
+		t.Fatal(err)
+	}
+	fe.complete(nextStart(t, fe), 0) // a again
+	select {
+	case id := <-fe.started:
+		t.Fatalf("join refired without a fresh second parent (id %s)", id)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
 func TestTaskNoSelfOverlap(t *testing.T) {
 	d, fe, dir := newTaskTestDaemon(t)
 	cfg := &config.ProjectFile{Tasks: map[string]config.Task{"slow": {Run: "ok"}}}
@@ -179,7 +233,7 @@ func TestRecoverTaskRuns(t *testing.T) {
 	d, fe, dir := newTaskTestDaemon(t)
 	cfg := &config.ProjectFile{Tasks: map[string]config.Task{
 		"long": {Run: "ok"},
-		"next": {Run: "ok", After: "long"},
+		"next": {Run: "ok", After: config.AfterList{"long"}},
 	}}
 	ps := injectTaskProject(d, dir, cfg)
 	d.startTasks(context.Background(), ps)

@@ -662,6 +662,11 @@ that nexus already applies to projects.
   evaluated in UTC. Missed fires while the daemon was down are **skipped**, not backfilled.
 - **`after: <task>`** — the named sibling task **completing successfully**. If the upstream task
   fails (non-zero exit), its `after:` dependents do **not** run — a chain stops on failure.
+- **`after: [a, b]`** — a **fan-in join**: the task runs when **all** the named tasks have
+  succeeded. The barrier is edge-triggered against the join's own last run — every parent must
+  have a successful run *newer than the join last ran* — so the successes that trigger a fire are
+  consumed by it, and a parent succeeding twice before the others catch up still fires the join
+  once. (This sidesteps run-correlation without a correlation table; see the implementation note.)
 - **neither** — the task runs only when triggered manually.
 
 **Manual trigger.** `nexus task run <project>/<task>` runs a task now and cascades to its
@@ -674,8 +679,16 @@ fire is skipped. Each run is recorded (in a `task_runs` table) with its **trigge
 surfaced in the web UI as the task graph and its run history.
 
 **Validation.** The `after:` graph is checked at deploy time: an `after:` referencing an unknown
-task, or a cycle (`a after b`, `b after a`), is a deploy error — the same fail-loud posture as an
-undefined `${VAR}`.
+task, a task listing itself or the same parent twice, or a cycle (`a after b`, `b after a`, incl.
+cycles through a join), is a deploy error — the same fail-loud posture as an undefined `${VAR}`.
+
+**Fan-in correlation.** The genuinely hard part of a join is *which* run of each parent pairs with
+which — and nexus deliberately does not track pairings. A join fires when each parent has **at
+least one** successful run with a `task_runs` id greater than the join's own last run id, then its
+new run (a higher id) becomes the next watermark. Evaluated under a per-project lock against the
+freshly-recorded row, so two parents finishing at the same instant fire the join exactly once. The
+trade-off: bursts collapse (three successes of `a` and one of `b` fire the join once, not three
+times) — which is the desired "run when the set is ready" semantics, not per-run pairing.
 
 **Process ownership** follows the three-process split (see Self-Update): the `nexus` runtime
 owns the *scheduling* (computing the next fire and reacting to completions), while the fired
@@ -703,11 +716,8 @@ it holds across restarts too.
 ### Designed soon
 
 These are intended extensions of the task model, deliberately left out of the first cut so the
-core (single-parent `after:`, on-success, one project) ships small:
+core (`after:` chains and fan-in joins, on-success, one project) ships small:
 
-- **Fan-in / joins** — `after: [a, b]` meaning *when both succeed*. Needs run-correlation
-  (which run of `a` pairs with which run of `b`), which is the genuinely hard part; single-parent
-  chains and fan-out come first.
 - **Failure-mode triggers** — reacting to *failure*, not just success: retry-with-policy on a
   failed task, an `on_failure:` edge that triggers a different task (alerting, compensation,
   cleanup), and `on: always` edges that run regardless of outcome. This is a whole design of its

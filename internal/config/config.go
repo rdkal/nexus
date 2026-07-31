@@ -28,10 +28,43 @@ type Service struct {
 // Task is a one-shot command run on a trigger: a cron schedule, another task's
 // success (After), or manually. See DESIGN "Tasks (scheduled & triggered)".
 type Task struct {
-	Run         string `yaml:"run"`
-	Schedule    string `yaml:"schedule"` // cron / "@every 15m" / "@daily" — a time trigger
-	After       string `yaml:"after"`    // another task in this file — run when it succeeds
-	Environment Env    `yaml:"environment"`
+	Run         string    `yaml:"run"`
+	Schedule    string    `yaml:"schedule"` // cron / "@every 15m" / "@daily" — a time trigger
+	After       AfterList `yaml:"after"`    // sibling task(s) — run when they succeed (all, for a join)
+	Environment Env       `yaml:"environment"`
+}
+
+// AfterList is a task's after: trigger. A single task name runs the task when
+// that one succeeds; a list is a fan-in join — the task runs when all of the
+// named tasks have succeeded. Accepts either YAML form:
+//
+//	after: build          # single parent
+//	after: [test, lint]   # join: run when both succeed
+type AfterList []string
+
+func (a *AfterList) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		var s string
+		if err := node.Decode(&s); err != nil {
+			return err
+		}
+		if s == "" {
+			*a = nil
+		} else {
+			*a = AfterList{s}
+		}
+		return nil
+	case yaml.SequenceNode:
+		var xs []string
+		if err := node.Decode(&xs); err != nil {
+			return err
+		}
+		*a = AfterList(xs)
+		return nil
+	default:
+		return fmt.Errorf("after: must be a task name or a list of task names")
+	}
 }
 
 // Env is a set of environment variables. It accepts both docker-compose forms:
@@ -168,29 +201,57 @@ func ValidateTasks(tasks map[string]Task) error {
 		if t.Run == "" {
 			return fmt.Errorf("task %q: missing run", name)
 		}
-		if t.Schedule != "" && t.After != "" {
+		if t.Schedule != "" && len(t.After) > 0 {
 			return fmt.Errorf("task %q: set only one of schedule or after", name)
 		}
-		if t.After != "" {
-			if _, ok := tasks[t.After]; !ok {
-				return fmt.Errorf("task %q: after references unknown task %q", name, t.After)
+		seen := map[string]bool{}
+		for _, p := range t.After {
+			switch {
+			case p == "":
+				return fmt.Errorf("task %q: after has an empty task name", name)
+			case p == name:
+				return fmt.Errorf("task %q: after references itself", name)
+			case seen[p]:
+				return fmt.Errorf("task %q: after lists %q twice", name, p)
+			}
+			seen[p] = true
+			if _, ok := tasks[p]; !ok {
+				return fmt.Errorf("task %q: after references unknown task %q", name, p)
 			}
 		}
 	}
-	// Detect a cycle in the after chain (each task has at most one after → a cycle
-	// is a simple loop; walk each chain with a visited set).
+	// Detect a cycle in the after graph. A task may now have several parents (a
+	// join), so it is a general DAG — walk it with a depth-first search, colouring
+	// each node unvisited / on-stack / done; a back-edge to an on-stack node is a
+	// cycle.
+	const onStack, done = 1, 2
+	state := map[string]int{}
+	var visit func(string) error
+	visit = func(n string) error {
+		switch state[n] {
+		case onStack:
+			return fmt.Errorf("task %q: after: forms a cycle", n)
+		case done:
+			return nil
+		}
+		state[n] = onStack
+		for _, p := range tasks[n].After {
+			if err := visit(p); err != nil {
+				return err
+			}
+		}
+		state[n] = done
+		return nil
+	}
+	// Visit in a stable order so the reported cycle is deterministic.
+	names := make([]string, 0, len(tasks))
 	for name := range tasks {
-		seen := map[string]bool{}
-		for cur := name; ; {
-			after := tasks[cur].After
-			if after == "" {
-				break
-			}
-			if seen[after] {
-				return fmt.Errorf("task %q: after: forms a cycle", name)
-			}
-			seen[after] = true
-			cur = after
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := visit(name); err != nil {
+			return err
 		}
 	}
 	return nil
