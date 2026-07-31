@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/rdkal/nexus/internal/config"
+	"github.com/rdkal/nexus/internal/db"
 	"github.com/rdkal/nexus/internal/home"
 )
 
@@ -199,11 +200,22 @@ func (d *Daemon) serve(ctx context.Context) error {
 // --- JSON response types ---
 
 type projectSummary struct {
+	Name       string        `json:"name"`
+	SpecPath   string        `json:"spec_path"`
+	Ref        string        `json:"ref"`
+	CurrentSHA string        `json:"current_sha,omitempty"`
+	Health     string        `json:"health"`
+	Tasks      []taskSummary `json:"tasks,omitempty"` // populated on project detail only
+}
+
+type taskSummary struct {
 	Name       string `json:"name"`
-	SpecPath   string `json:"spec_path"`
-	Ref        string `json:"ref"`
-	CurrentSHA string `json:"current_sha,omitempty"`
-	Health     string `json:"health"`
+	Schedule   string `json:"schedule,omitempty"`
+	After      string `json:"after,omitempty"`
+	LastStatus string `json:"last_status,omitempty"` // running|success|failed; "" = never run
+	LastReason string `json:"last_reason,omitempty"`
+	LastAt     int64  `json:"last_at,omitempty"`
+	LastExit   *int   `json:"last_exit,omitempty"`
 }
 
 type serviceSummary struct {
@@ -319,7 +331,51 @@ func (d *Daemon) getProject(w http.ResponseWriter, address string) {
 	ps.mu.RUnlock()
 
 	summary.Health = d.projectHealth(address, cfg)
+	summary.Tasks = d.taskSummaries(address, cfg)
 	writeJSON(w, summary)
+}
+
+// taskSummaries lists a project's task definitions with the status of each
+// task's most recent run, so the web UI can show tasks and offer a retry.
+func (d *Daemon) taskSummaries(address string, cfg *config.ProjectFile) []taskSummary {
+	if cfg == nil || len(cfg.Tasks) == 0 {
+		return nil
+	}
+
+	// Latest run per task: ListTaskRuns is newest-first, so the first row we see
+	// for a task is its most recent run.
+	last := map[string]db.TaskRun{}
+	if runs, err := d.DB.ListTaskRuns(address, 200); err == nil {
+		for _, r := range runs {
+			if _, seen := last[r.Task]; !seen {
+				last[r.Task] = r
+			}
+		}
+	}
+
+	names := make([]string, 0, len(cfg.Tasks))
+	for name := range cfg.Tasks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make([]taskSummary, 0, len(names))
+	for _, name := range names {
+		t := cfg.Tasks[name]
+		ts := taskSummary{
+			Name:     name,
+			Schedule: t.Schedule,
+			After:    t.After,
+		}
+		if r, ok := last[name]; ok {
+			ts.LastStatus = r.Status
+			ts.LastReason = r.Reason
+			ts.LastAt = r.StartedAt.Unix()
+			ts.LastExit = r.ExitCode
+		}
+		out = append(out, ts)
+	}
+	return out
 }
 
 func (d *Daemon) getHistory(w http.ResponseWriter, address string) {

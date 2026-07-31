@@ -180,6 +180,69 @@ func TestHandleGetProject_NotFound(t *testing.T) {
 	}
 }
 
+func TestHandleGetProject_IncludesTasks(t *testing.T) {
+	database := openDB(t)
+	d := daemon.New(database, &stubSupervisor{}, testPaths(t))
+
+	must(t, database.AddProject(db.Project{Name: "app", SpecPath: "github.com/myorg/app", Ref: "@main"}))
+
+	cfg := &config.ProjectFile{
+		Tasks: map[string]config.Task{
+			"backup":  {Run: "sh -c true", Schedule: "@daily"},
+			"migrate": {Run: "sh -c false", After: "backup"},
+			"seed":    {Run: "sh -c true"}, // manual, never run
+		},
+	}
+	d.InjectProject("app", cfg, "abc123")
+
+	// backup succeeded; migrate failed with exit 3; seed never ran.
+	bid, err := database.AddTaskRun("app", "backup", "schedule", time.Now())
+	must(t, err)
+	must(t, database.FinishTaskRun(bid, "success", 0, time.Now()))
+	mid, err := database.AddTaskRun("app", "migrate", "after:backup", time.Now())
+	must(t, err)
+	must(t, database.FinishTaskRun(mid, "failed", 3, time.Now()))
+
+	rec := httptest.NewRecorder()
+	d.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/projects/app", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+
+	var out struct {
+		Tasks []struct {
+			Name       string `json:"name"`
+			Schedule   string `json:"schedule"`
+			After      string `json:"after"`
+			LastStatus string `json:"last_status"`
+			LastExit   *int   `json:"last_exit"`
+		} `json:"tasks"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Tasks) != 3 {
+		t.Fatalf("expected 3 tasks, got %d: %+v", len(out.Tasks), out.Tasks)
+	}
+	// Tasks are sorted by name: backup, migrate, seed.
+	byName := map[string]int{}
+	for i, tk := range out.Tasks {
+		byName[tk.Name] = i
+	}
+	backup := out.Tasks[byName["backup"]]
+	if backup.Schedule != "@daily" || backup.LastStatus != "success" {
+		t.Errorf("backup = %+v", backup)
+	}
+	migrate := out.Tasks[byName["migrate"]]
+	if migrate.After != "backup" || migrate.LastStatus != "failed" || migrate.LastExit == nil || *migrate.LastExit != 3 {
+		t.Errorf("migrate = %+v (exit=%v)", migrate, migrate.LastExit)
+	}
+	seed := out.Tasks[byName["seed"]]
+	if seed.LastStatus != "" {
+		t.Errorf("seed should have no last run, got %+v", seed)
+	}
+}
+
 func TestHandleGetHistory(t *testing.T) {
 	database := openDB(t)
 	d := daemon.New(database, &stubSupervisor{}, testPaths(t))

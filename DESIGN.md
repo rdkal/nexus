@@ -715,8 +715,10 @@ core (single-parent `after:`, on-success, one project) ships small:
   separately.
 - **Cross-project triggers** — a task in one project triggering a task in another, the way
   cross-project volume variables already cross the project boundary.
-- **Web UI for tasks** — the task graph, per-task run history, last-run status/next-fire time,
-  and a manual-run button, added to nexus-web.
+- **Web UI for tasks** — *shipped:* a project's detail page lists each task with its trigger
+  (`schedule:`/`after:`/manual) and last-run status, plus a manual **Run** button that reads
+  **Retry** on a failed task. *Still to come:* the task graph view, per-task run history, and
+  next-fire time.
 
 The heavier, fully general version of all of this — conditional edges, approvals, cross-project
 orchestration — remains the deferred **Flows / pipelines** item; tasks-with-triggers is the
@@ -830,7 +832,7 @@ The URL scheme mirrors the resource name tree.
 | Page | Content |
 |---|---|
 | `/` | All projects, current SHA per deployment, service health |
-| `/<project-name>` | Project detail: history, current SHA, build log |
+| `/<project-name>` | Project detail: history, current SHA, build log, services, and tasks (each with its trigger, last-run status, and a **Run**/**Retry** button) |
 | `/<project-name>/<alias>` | Nested project detail |
 | `/<project-name>/.../<name>` | Service status and live log tail, or volume info |
 
@@ -854,7 +856,12 @@ POST /api/<project-name>/redeploy
 GET  /api/<project-name>/services
 GET  /api/<project-name>/services/<name>
 POST /api/<project-name>/services/<name>/restart
+POST /api/<project-name>/tasks/<name>/run
 ```
+
+The project-detail response (`GET /api/<project-name>`) carries a `tasks` array — each task's
+name, trigger (`schedule`/`after`), and the status of its most recent run — so the detail page
+can render the task list without a second round-trip.
 
 ---
 

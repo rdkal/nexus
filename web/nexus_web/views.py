@@ -44,6 +44,12 @@ _STATUS_VARIANT = {
     "building": "muted",
 }
 
+_TASK_STATUS_VARIANT = {
+    "success": "success",
+    "failed": "danger",
+    "running": "muted",
+}
+
 
 def _shell(view):
     return Page(title=TITLE, fixi=True)[
@@ -137,18 +143,58 @@ def project_page(address: str, project: dict, history: list[dict], services: lis
     # Redeploy re-runs the build + swap at the current SHA. POST to the project's
     # own URL; fixi swaps the returned banner into #banner.
     redeploy = _action_button("Redeploy", "/" + address)
-    return _shell(
-        Stack[
-            _crumbs(address),
-            Row[h.h1[address], redeploy],
-            h.div("#banner"),
-            meta,
-            h.h2["Services"],
-            _services_table(address, services),
-            h.h2["History"],
-            _history_table(address, history),
-        ]
-    )
+    body: list = [
+        _crumbs(address),
+        Row[h.h1[address], redeploy],
+        h.div("#banner"),
+        meta,
+        h.h2["Services"],
+        _services_table(address, services),
+    ]
+    tasks = project.get("tasks") or []
+    if tasks:
+        body += [h.h2["Tasks"], _tasks_table(address, tasks)]
+    body += [h.h2["History"], _history_table(address, history)]
+    return _shell(Stack[tuple(body)])
+
+
+def _task_badge(status: str):
+    return Badge(f".{_TASK_STATUS_VARIANT.get(status, 'muted')}")[status or "never run"]
+
+
+def _task_trigger(task: dict) -> str:
+    if task.get("schedule"):
+        return "schedule: " + task["schedule"]
+    if task.get("after"):
+        return "after: " + task["after"]
+    return "manual"
+
+
+def _tasks_table(address: str, tasks: list[dict]):
+    if not tasks:
+        return Empty(title="No tasks")
+    rows = []
+    for t in tasks:
+        name = t["name"]
+        last = t.get("last_status", "")
+        exit_code = t.get("last_exit")
+        last_cell = _task_badge(last)
+        if last == "failed" and exit_code is not None:
+            last_cell = Row[last_cell, h.span(class_="muted")[f"exit {exit_code}"]]
+        # A failed task's button reads "Retry"; otherwise "Run". Both POST to the
+        # task's run URL and swap the returned banner into #banner.
+        label = "Retry" if last == "failed" else "Run"
+        button = _action_button(label, f"/{address}/tasks/{name}/run")
+        rows.append(
+            [
+                h.span[name],
+                h.span(class_="muted")[_task_trigger(t)],
+                last_cell,
+                _fmt_time(t.get("last_at")),
+                button,
+            ]
+        )
+    return Table(headers=["Task", "Trigger", "Last run", "When", ""], rows=rows)
 
 
 def _services_table(address: str, services: list[dict]):
