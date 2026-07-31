@@ -18,6 +18,7 @@ class StubClient:
     def __init__(self):
         self.redeployed = []
         self.restarted = []
+        self.ran_tasks = []
 
     def list_projects(self):
         return [
@@ -26,7 +27,21 @@ class StubClient:
         ]
 
     def get_project(self, address):
-        return {"name": address, "ref": "@main", "current_sha": "abc123def456", "health": "degraded"}
+        return {
+            "name": address,
+            "ref": "@main",
+            "current_sha": "abc123def456",
+            "health": "degraded",
+            "tasks": [
+                {"name": "backup", "schedule": "@daily", "last_status": "success", "last_at": 1700000000},
+                {"name": "migrate", "after": "backup", "last_status": "failed", "last_exit": 3, "last_at": 1700000100},
+                {"name": "seed", "last_status": ""},
+            ],
+        }
+
+    def run_task(self, address, task):
+        self.ran_tasks.append((address, task))
+        return {"triggered": task}
 
     def get_history(self, address):
         return [{"id": 1, "sha": "abc123def456", "status": "active", "started_at": 1700000000}]
@@ -77,6 +92,35 @@ def test_project_page_has_services_and_redeploy():
     assert "metrics/exporter" in r.text
     assert 'fx-action="/app"' in r.text and 'fx-method="post"' in r.text  # redeploy button
     assert 'href="/app/builds/abc123def456"' in r.text  # history SHA → build log
+
+
+def test_project_page_shows_tasks_with_run_and_retry():
+    c, _ = _client()
+    r = c.get("/app")
+    assert r.status_code == 200
+    assert "Tasks" in r.text
+    assert "backup" in r.text and "migrate" in r.text and "seed" in r.text
+    # A failed task's button reads "Retry" and shows its exit code.
+    assert ">Retry<" in r.text and "exit 3" in r.text
+    # Non-failed tasks get a "Run" button; each posts to the task's run URL.
+    assert ">Run<" in r.text
+    assert 'fx-action="/app/tasks/migrate/run"' in r.text
+    assert 'fx-action="/app/tasks/backup/run"' in r.text
+
+
+def test_run_task_action():
+    c, stub = _client()
+    r = c.post("/app/tasks/migrate/run")
+    assert r.status_code == 200
+    assert "Triggered migrate" in r.text and "banner" in r.text
+    assert stub.ran_tasks == [("app", "migrate")]
+
+
+def test_run_task_unknown_project_404():
+    c, stub = _client()
+    # An unknown project address falls through to the normal resolve → 404.
+    assert c.post("/nope/tasks/x/run").status_code == 404
+    assert stub.ran_tasks == []
 
 
 def test_build_log_page():

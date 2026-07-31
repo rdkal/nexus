@@ -63,6 +63,9 @@ class NexusClient:
     def restart(self, address: str, service: str) -> dict:
         return self._post_json(f"/projects/{address}/services/{service}/restart")
 
+    def run_task(self, address: str, task: str) -> dict:
+        return self._post_json(f"/projects/{address}/tasks/{task}/run")
+
     # --- internals ---
 
     def _get_json(self, path: str):

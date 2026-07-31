@@ -43,6 +43,35 @@ def test_project_page_lists_services_and_history():
     assert 'href="/app/metrics/exporter"' in out  # link to inline service
 
 
+def test_project_page_renders_tasks_with_run_and_retry():
+    project = {
+        "name": "app",
+        "ref": "@main",
+        "current_sha": "1234567890ab",
+        "health": "healthy",
+        "tasks": [
+            {"name": "backup", "schedule": "@daily", "last_status": "success", "last_at": 1700000000},
+            {"name": "migrate", "after": "backup", "last_status": "failed", "last_exit": 3, "last_at": 1700000100},
+            {"name": "seed", "last_status": ""},
+        ],
+    }
+    out = render(views.project_page("app", project, [], []))
+    assert "Tasks" in out
+    assert "backup" in out and "migrate" in out and "seed" in out
+    assert "@daily" in out and "after: backup" in out and "manual" in out
+    # Failed task → Retry button + exit code; others → Run button.
+    assert ">Retry<" in out and "exit 3" in out
+    assert ">Run<" in out
+    assert 'fx-action="/app/tasks/migrate/run"' in out
+    assert 'fx-action="/app/tasks/seed/run"' in out
+
+
+def test_project_page_without_tasks_omits_section():
+    project = {"name": "app", "ref": "@main", "current_sha": "1234567890ab", "health": "healthy"}
+    out = render(views.project_page("app", project, [], []))
+    assert "Tasks" not in out
+
+
 def test_service_page_shows_log_and_refresh():
     row = {"name": "metrics/exporter", "running": True, "degraded": False, "restarts": 0, "pid": "222"}
     out = render(views.service_page("app", "metrics/exporter", row, "l1\nEXPORTER_STARTED\n"))

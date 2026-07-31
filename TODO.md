@@ -95,7 +95,8 @@
 | Fan-in / joins — `after: [a, b]` (both succeed), incl. run-correlation | | | |
 | Failure-mode design — retry-with-policy on a failed task, `on_failure:` triggering a different task, `on: always` edges | | | |
 | Cross-project task triggers (a task in one project triggering one in another) | | | |
-| Web UI for tasks — task graph, per-task run history, last status / next fire, manual-run button | | | |
+| Web UI for tasks — project detail lists each task with trigger + last-run status, and a manual **Run** / **Retry** (on a failed task) button | ✅ | ✅ | ✅ |
+| Web UI for tasks — task graph view, per-task run history, next-fire time | | | |
 | **Volumes** |
 | Volume directory creation at `volumes/<address>/` on first use | ✅ | ✅ | |
 | **State persistence** |

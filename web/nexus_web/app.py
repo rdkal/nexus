@@ -91,7 +91,20 @@ def create_app(client: NexusClient) -> FastAPI:
         except NexusError as e:
             return IrisResponse(views.action_banner(f"daemon unreachable: {e}", ok=False), status_code=502)
 
-        target = tree.resolve(path, {p["name"] for p in projects})
+        addresses = {p["name"] for p in projects}
+
+        # Task run/retry: /<address>/tasks/<task>/run. Task names have no slashes,
+        # so this is unambiguous; handle it before the project/service resolve.
+        if path.endswith("/run"):
+            head, sep, task = path[: -len("/run")].rpartition("/tasks/")
+            if sep and task and "/" not in task and head in addresses:
+                try:
+                    client.run_task(head, task)
+                    return IrisResponse(views.action_banner(f"Triggered {task}"))
+                except NexusError as e:
+                    return IrisResponse(views.action_banner(str(e), ok=False), status_code=502)
+
+        target = tree.resolve(path, addresses)
         if target is None:
             return IrisResponse(views.action_banner(f"No project or service at /{path}", ok=False), status_code=404)
 
