@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -62,6 +63,9 @@ CREATE TABLE IF NOT EXISTS task_runs (
     started_at  INTEGER NOT NULL,
     finished_at INTEGER
 );
+-- The ux_task_runs_running partial unique index (hard no-overlap: at most one
+-- 'running' row per address+task) is created in migrate(), which first collapses
+-- any pre-existing duplicate 'running' rows an older build may have left behind.
 `
 
 // DB wraps a SQLite connection with nexus-specific operations.
@@ -111,6 +115,16 @@ func migrate(conn *sql.DB) error {
 	steps := []string{
 		`ALTER TABLE projects ADD COLUMN subdir TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE projects ADD COLUMN stopped INTEGER NOT NULL DEFAULT 0`,
+		// Before adding the no-overlap unique index to an existing DB, collapse any
+		// pre-existing duplicate 'running' rows (older builds enforced no-overlap
+		// only in-process). Keeps the newest per (address, task); a no-op on a clean
+		// DB. Must run before the CREATE UNIQUE INDEX below, or that would fail.
+		`UPDATE task_runs SET status = 'failed', exit_code = -1, finished_at = started_at
+		 WHERE status = 'running' AND id NOT IN (
+		   SELECT MAX(id) FROM task_runs WHERE status = 'running' GROUP BY address, task
+		 )`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS ux_task_runs_running
+		 ON task_runs(address, task) WHERE status = 'running'`,
 	}
 	for _, stmt := range steps {
 		if _, err := conn.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -222,13 +236,24 @@ type TaskRun struct {
 	FinishedAt *time.Time
 }
 
+// ErrTaskRunning is returned by AddTaskRun when the (address, task) already has a
+// run in progress: the partial unique index rejects a second 'running' row. This
+// is the hard, atomic no-overlap guarantee — it holds even if two schedulers or
+// processes race past the in-process check.
+var ErrTaskRunning = errors.New("task already has a run in progress")
+
 // AddTaskRun records the start of a task run (status 'running') and returns its ID.
+// It returns ErrTaskRunning if a run for the same (address, task) is already in
+// progress — the DB, not just the caller's lock, enforces no-overlap.
 func (d *DB) AddTaskRun(address, task, reason string, startedAt time.Time) (int64, error) {
 	res, err := d.conn.Exec(
 		`INSERT INTO task_runs (address, task, reason, status, started_at) VALUES (?, ?, ?, 'running', ?)`,
 		address, task, reason, startedAt.Unix(),
 	)
 	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return 0, ErrTaskRunning
+		}
 		return 0, fmt.Errorf("add task run: %w", err)
 	}
 	return res.LastInsertId()

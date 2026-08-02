@@ -2,6 +2,7 @@ package db_test
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -247,6 +248,107 @@ func TestMigrate_AddsSubdirColumn(t *testing.T) {
 	got2, _ := d.GetProject("api2")
 	if got2.Subdir != "services/api" {
 		t.Errorf("Subdir = %q, want services/api", got2.Subdir)
+	}
+}
+
+func TestAddTaskRun_HardNoOverlap(t *testing.T) {
+	d := openDB(t)
+
+	// First claim for (app, backup) succeeds.
+	id1, err := d.AddTaskRun("app", "backup", "manual", time.Now())
+	if err != nil {
+		t.Fatalf("first AddTaskRun: %v", err)
+	}
+
+	// A second concurrent claim for the same task is rejected by the DB — the
+	// hard guarantee, independent of any in-process lock.
+	if _, err := d.AddTaskRun("app", "backup", "schedule", time.Now()); !errors.Is(err, db.ErrTaskRunning) {
+		t.Fatalf("second AddTaskRun err = %v, want ErrTaskRunning", err)
+	}
+
+	// A different task, and the same task in a different project, are unaffected.
+	if _, err := d.AddTaskRun("app", "restore", "manual", time.Now()); err != nil {
+		t.Errorf("different task rejected: %v", err)
+	}
+	if _, err := d.AddTaskRun("other", "backup", "manual", time.Now()); err != nil {
+		t.Errorf("same task in another project rejected: %v", err)
+	}
+
+	// Once the first run finishes, the slot frees and a new run can claim it.
+	if err := d.FinishTaskRun(id1, "success", 0, time.Now()); err != nil {
+		t.Fatalf("FinishTaskRun: %v", err)
+	}
+	if _, err := d.AddTaskRun("app", "backup", "schedule", time.Now()); err != nil {
+		t.Errorf("claim after finish rejected: %v", err)
+	}
+
+	// A finished run does not block, and finalised rows are never uniqueness-
+	// constrained: many success/failed rows coexist for the same task.
+	if _, err := d.AddTaskRun("app", "restore", "manual", time.Now()); !errors.Is(err, db.ErrTaskRunning) {
+		t.Errorf("restore still running, want ErrTaskRunning, got %v", err)
+	}
+}
+
+func TestMigrate_CollapsesDuplicateRunningRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+
+	// Simulate a pre-index database that (hypothetically) accumulated two 'running'
+	// rows for the same task — what the unique index must now prevent. The
+	// migration has to collapse these before the index can be created.
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatalf("open raw: %v", err)
+	}
+	_, err = raw.Exec(`
+		CREATE TABLE task_runs (
+		    id INTEGER PRIMARY KEY AUTOINCREMENT,
+		    address TEXT NOT NULL, task TEXT NOT NULL, reason TEXT NOT NULL,
+		    status TEXT NOT NULL, exit_code INTEGER,
+		    started_at INTEGER NOT NULL, finished_at INTEGER
+		);
+		INSERT INTO task_runs (address, task, reason, status, started_at) VALUES
+		    ('app', 'backup', 'schedule', 'running', 100),
+		    ('app', 'backup', 'manual',   'running', 200);
+	`)
+	if err != nil {
+		t.Fatalf("seed old schema: %v", err)
+	}
+	raw.Close()
+
+	// Open through db.Open, which runs the migration (collapse + create index).
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("Open (migrate): %v", err)
+	}
+	defer d.Close()
+
+	// Exactly the newest running row survives; the older one was finalised failed.
+	if running, err := d.HasRunningTaskRun("app", "backup"); err != nil || !running {
+		t.Fatalf("expected one running row to survive: running=%v err=%v", running, err)
+	}
+	runs, err := d.ListTaskRuns("app", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(runs))
+	}
+	var running, failed int
+	for _, r := range runs {
+		switch r.Status {
+		case "running":
+			running++
+		case "failed":
+			failed++
+		}
+	}
+	if running != 1 || failed != 1 {
+		t.Errorf("after collapse: running=%d failed=%d, want 1 and 1", running, failed)
+	}
+
+	// And the index is now enforced: a second claim is rejected.
+	if _, err := d.AddTaskRun("app", "backup", "manual", time.Now()); !errors.Is(err, db.ErrTaskRunning) {
+		t.Errorf("post-migrate claim err = %v, want ErrTaskRunning", err)
 	}
 }
 
