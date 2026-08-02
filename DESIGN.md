@@ -710,8 +710,12 @@ The runtime does **not** block on the run — it uses a poll-and-recover protoco
    left dangling. (If nexus-pm has no record of the run — e.g. the whole stack restarted, so
    the process is gone — that run is marked `failed`.)
 
-No self-overlap is enforced against the DB (a task with a `running` row won't fire again), so
-it holds across restarts too.
+No self-overlap is a **hard, DB-enforced** guarantee: a partial unique index
+(`task_runs(address, task) WHERE status='running'`) permits at most one in-flight run per task, so
+a second claim is rejected by the database itself — not merely by the runtime's in-process lock.
+The scheduler still checks first (to skip cleanly in the common case), but the atomic insert is
+the final arbiter, so the guarantee holds even across a scheduler swap, a restart, or two
+processes briefly overlapping.
 
 ### Designed soon
 

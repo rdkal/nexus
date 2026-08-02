@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/rdkal/nexus/internal/config"
 	"github.com/rdkal/nexus/internal/cron"
+	"github.com/rdkal/nexus/internal/db"
 	"github.com/rdkal/nexus/internal/penv"
 	"github.com/rdkal/nexus/internal/supervisor"
 )
@@ -123,10 +125,13 @@ func (s *taskScheduler) launch(ctx context.Context, name, reason string) {
 }
 
 // claimLocked records a 'running' task_runs row unless one already exists for the
-// task, returning the new run id. The caller must hold fireMu; checking and
-// inserting under the same lock is what makes concurrent triggers (e.g. two
-// parents of a join finishing together) claim at most one run.
+// task, returning the new run id. The caller holds fireMu, so concurrent triggers
+// in this process serialise here; but the guarantee does not rest on that lock —
+// the DB's partial unique index rejects a second 'running' row, so AddTaskRun
+// returning ErrTaskRunning is the hard backstop that also covers a scheduler swap
+// or a second process racing the in-process check below.
 func (s *taskScheduler) claimLocked(name, reason string) (int64, bool) {
+	// Fast path: skip cleanly when a run is already active (the common case).
 	running, err := s.d.DB.HasRunningTaskRun(s.address, name)
 	if err != nil {
 		slog.Error("task: overlap check failed", "task", s.key(name), "err", err)
@@ -138,6 +143,11 @@ func (s *taskScheduler) claimLocked(name, reason string) (int64, bool) {
 	}
 	id, err := s.d.DB.AddTaskRun(s.address, name, reason, time.Now())
 	if err != nil {
+		if errors.Is(err, db.ErrTaskRunning) {
+			// Lost the race after the check above: another claim inserted first.
+			slog.Warn("task: previous run still active; skipping", "task", s.key(name), "reason", reason)
+			return 0, false
+		}
 		slog.Error("task: could not record run", "task", s.key(name), "err", err)
 		return 0, false
 	}

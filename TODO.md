@@ -88,7 +88,7 @@
 | Manual trigger — `nexus task run <project>/<task>` + `nexus task list`, cascades to `after:` dependents | ✅ | ✅ | ✅ |
 | One-shot execution **under nexus-pm** (non-blocking `POST/GET/DELETE /run/{id}`) — survives a runtime restart; output to `logs/<address>/tasks/<task>/current.log` | ✅ | ✅ | ✅ |
 | Poll-and-recover across a runtime restart — startup re-polls `running` rows, finalises them, and fires their `after:` cascade (lost run → `failed`) | ✅ | ✅ | ✅ |
-| No self-overlap — DB-backed (a task with a `running` row won't fire again), holds across restarts | ✅ | ✅ | ✅ |
+| No self-overlap — hard DB guarantee via a partial unique index (`task_runs(address,task) WHERE status='running'`); a second concurrent claim is rejected by the DB, holds across restarts / scheduler swaps / overlapping processes | ✅ | ✅ | ✅ |
 | `task_runs` table — per-run trigger reason (`schedule`/`after:X`/`manual`), start/finish, exit; socket `GET /projects/<addr>/tasks` | ✅ | ✅ | ✅ |
 | Validate `after:` graph at deploy time — unknown task or cycle is a deploy error | ✅ | ✅ | ✅ |
 | Fan-in / joins — `after: [a, b]` runs when all parents succeed; edge-triggered barrier against the join's own last run (no run-correlation table) | ✅ | ✅ | ✅ |
