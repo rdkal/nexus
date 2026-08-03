@@ -401,6 +401,108 @@ func TestRuns_AddFinishListRemove(t *testing.T) {
 	}
 }
 
+func TestRuns_StopRequestedAndCancelled(t *testing.T) {
+	d := openDB(t)
+	id, err := d.AddRun("op", "app", "sleep", "/w", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req, _ := d.RunStopRequested(id); req {
+		t.Error("new run should not be stop-requested")
+	}
+	if err := d.MarkRunStopRequested(id); err != nil {
+		t.Fatal(err)
+	}
+	if req, err := d.RunStopRequested(id); err != nil || !req {
+		t.Fatalf("stop-requested = %v err=%v, want true", req, err)
+	}
+	// The flag surfaces on the record, and 'cancelled' is an accepted status.
+	if got, _, _ := d.GetRun("op"); !got.StopRequested {
+		t.Error("GetRun did not surface StopRequested")
+	}
+	if err := d.FinishRun(id, "cancelled", -1, time.Now()); err != nil {
+		t.Fatalf("FinishRun cancelled: %v", err)
+	}
+	if got, _, _ := d.GetRun("op"); got.Status != "cancelled" {
+		t.Errorf("status = %q, want cancelled", got.Status)
+	}
+}
+
+func TestMigrate_RunsAddsCancelledStatus(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+
+	// Simulate a runs table from the first managed-runs version: old CHECK (no
+	// 'cancelled'), no stop_requested column, with a couple of rows.
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatalf("open raw: %v", err)
+	}
+	_, err = raw.Exec(`
+		CREATE TABLE runs (
+		    id INTEGER PRIMARY KEY AUTOINCREMENT,
+		    name TEXT NOT NULL, address TEXT NOT NULL DEFAULT '',
+		    command TEXT NOT NULL, workdir TEXT NOT NULL,
+		    status TEXT NOT NULL CHECK(status IN ('running','success','failed')),
+		    exit_code INTEGER, started_at INTEGER NOT NULL, finished_at INTEGER
+		);
+		INSERT INTO runs (name, address, command, workdir, status, started_at) VALUES
+		    ('done', 'app', './x', '/w', 'success', 100),
+		    ('live', '',    './y', '/w', 'running', 200);
+	`)
+	if err != nil {
+		t.Fatalf("seed old runs: %v", err)
+	}
+	raw.Close()
+
+	// Open through db.Open → migration rebuilds the table.
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("Open (migrate): %v", err)
+	}
+	defer d.Close()
+
+	// Rows preserved.
+	runs, err := d.ListRuns(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("expected 2 rows after migrate, got %d", len(runs))
+	}
+
+	// The new column works and the widened CHECK accepts 'cancelled'.
+	if got, _, _ := d.GetRun("live"); got.StopRequested {
+		t.Error("migrated row should default stop_requested=0")
+	}
+	if _, _, err := d.GetRun("live"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.MarkRunStopRequested(mustRunID(t, d, "live")); err != nil {
+		t.Fatalf("MarkRunStopRequested after migrate: %v", err)
+	}
+	if err := d.FinishRun(mustRunID(t, d, "live"), "cancelled", -1, time.Now()); err != nil {
+		t.Fatalf("FinishRun cancelled after migrate: %v", err)
+	}
+
+	// The no-overlap index survived the rebuild: a second 'live' run is rejected
+	// only while one is running — after cancelling, a new one is allowed.
+	if _, err := d.AddRun("live", "", "z", "/w", time.Now()); err != nil {
+		t.Errorf("AddRun after cancel rejected: %v", err)
+	}
+	if _, err := d.AddRun("live", "", "z", "/w", time.Now()); !errors.Is(err, db.ErrRunActive) {
+		t.Errorf("second live AddRun err = %v, want ErrRunActive (index lost?)", err)
+	}
+}
+
+func mustRunID(t *testing.T, d *db.DB, name string) int64 {
+	t.Helper()
+	r, ok, err := d.GetRun(name)
+	if err != nil || !ok {
+		t.Fatalf("GetRun(%q): ok=%v err=%v", name, ok, err)
+	}
+	return r.ID
+}
+
 func TestRuns_UnattachedAndRunning(t *testing.T) {
 	d := openDB(t)
 	// Unattached run (empty address) is allowed and independent of attached ones.

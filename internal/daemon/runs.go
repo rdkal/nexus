@@ -164,9 +164,24 @@ func (d *Daemon) stopManagedRun(name string) error {
 	if d.taskExec == nil {
 		return fmt.Errorf("run executor not available")
 	}
+	// Record the intent first (durably), so the finaliser marks it 'cancelled'
+	// even if the runtime restarts between the signal and the process exiting.
+	if err := d.DB.MarkRunStopRequested(run.ID); err != nil {
+		return err
+	}
 	d.taskExec.StopRun(managedRunKey(run.ID))
 	slog.Info("run: stop requested", "name", name, "id", run.ID)
 	return nil
+}
+
+// runStopRequested reports whether the operator asked to stop this run.
+func (d *Daemon) runStopRequested(id int64) bool {
+	req, err := d.DB.RunStopRequested(id)
+	if err != nil {
+		slog.Warn("run: stop-requested lookup failed", "id", id, "err", err)
+		return false
+	}
+	return req
 }
 
 // awaitManagedRun polls nexus-pm until the run finishes (or is lost) and finalises
@@ -185,14 +200,23 @@ func (d *Daemon) awaitManagedRun(id int64, name string) {
 			// transient (nexus-pm briefly unreachable) — keep waiting.
 		case !known:
 			// nexus-pm has no record: the run was interrupted (nexus-pm restart or
-			// reboot). A managed run is never silently re-run, so mark it failed.
-			_ = d.DB.FinishRun(id, "failed", -1, time.Now())
-			slog.Warn("run: interrupted (no record in nexus-pm); marked failed", "name", name, "id", id)
+			// reboot). A managed run is never silently re-run; it's cancelled if a
+			// stop was requested, otherwise failed.
+			status := "failed"
+			if d.runStopRequested(id) {
+				status = "cancelled"
+			}
+			_ = d.DB.FinishRun(id, status, -1, time.Now())
+			slog.Warn("run: interrupted (no record in nexus-pm)", "name", name, "id", id, "status", status)
 			return
 		case state.Done:
 			status := "success"
 			if state.ExitCode != 0 || state.Err != "" {
 				status = "failed"
+			}
+			// A stop the operator asked for is recorded distinctly, not as a failure.
+			if d.runStopRequested(id) {
+				status = "cancelled"
 			}
 			_ = d.DB.FinishRun(id, status, state.ExitCode, time.Now())
 			d.taskExec.AckRun(key)

@@ -257,8 +257,10 @@ def page():
                     " lives there — so the run inherits that project's environment and volumes, "
                     "and its log lands under that project. A run is ",
                     h.strong["run-once"],
-                    ": it is never restarted, and stopping it (or an interrupted host reboot) "
-                    "records it as failed rather than silently re-running it.",
+                    ": it is never restarted. Stopping it records it as ",
+                    h.em["cancelled"],
+                    "; if it is interrupted (a host reboot) it is marked failed — never silently "
+                    "re-run.",
                 ],
                 h.h2["Environment variables"],
                 h.p[

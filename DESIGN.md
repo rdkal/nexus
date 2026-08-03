@@ -743,8 +743,8 @@ composable core it would build on.
 ## Managed runs (host-registered operations)
 
 > Status: **implemented** (`nexus run` / `list` / `logs` / `stop` / `rm`, project-by-cwd, durable
-> across a runtime restart; documented on the site). Still to come: a distinct `cancelled`/`stopped`
-> status (a stopped or interrupted run currently records as `failed`), a `--project` override,
+> across a runtime restart; documented on the site). A stopped run is recorded as `cancelled`; an
+> interrupted one (nexus-pm restart / reboot) as `failed`. Still to come: a `--project` override,
 > `logs -f`, and a web UI Runs section — tracked in the TODO.
 
 Tasks and services both come *from git* — declared in a `nexus.yaml`, deployed through the poll
