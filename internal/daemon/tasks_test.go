@@ -20,6 +20,7 @@ type fakeExec struct {
 	mu      sync.Mutex
 	done    map[string]supervisor.RunState
 	live    map[string]bool
+	stopped []string
 	started chan string
 }
 
@@ -51,6 +52,17 @@ func (f *fakeExec) AckRun(id string) {
 	f.mu.Lock()
 	delete(f.live, id)
 	delete(f.done, id)
+	f.mu.Unlock()
+}
+
+// StopRun records a stop request and marks the run done+failed, as a real signal
+// would eventually cause.
+func (f *fakeExec) StopRun(id string) {
+	f.mu.Lock()
+	f.stopped = append(f.stopped, id)
+	if f.live[id] {
+		f.done[id] = supervisor.RunState{Done: true, ExitCode: -1, Err: "signal: terminated"}
+	}
 	f.mu.Unlock()
 }
 

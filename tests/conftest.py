@@ -123,6 +123,9 @@ class NexusClient:
         _, body = self._request("GET", f"/runs/{name}/log")
         return body
 
+    def stop_run(self, name: str):
+        return self._request("POST", f"/runs/{name}/stop")
+
 
 # ---------------------------------------------------------------------------
 # Session fixture: build binaries once

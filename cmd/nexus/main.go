@@ -260,8 +260,27 @@ func runCmd(homeFlag *string) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.AddCommand(runListCmd(homeFlag), runLogsCmd(homeFlag), runRmCmd(homeFlag))
+	cmd.AddCommand(runListCmd(homeFlag), runLogsCmd(homeFlag), runStopCmd(homeFlag), runRmCmd(homeFlag))
 	return cmd
+}
+
+func runStopCmd(homeFlag *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop <name>",
+		Short: "Signal a running managed run to stop (recorded as failed)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			code, body, err := daemonDo(*homeFlag, "POST", "/runs/"+args[0]+"/stop")
+			if err != nil {
+				return err
+			}
+			if code != http.StatusAccepted {
+				return fmt.Errorf("%s", strings.TrimSpace(string(body)))
+			}
+			fmt.Printf("stopping run %q\n", args[0])
+			return nil
+		},
+	}
 }
 
 func runListCmd(homeFlag *string) *cobra.Command {

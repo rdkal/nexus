@@ -44,6 +44,22 @@ def test_run_completes_and_captures_log(nexus):
     assert "RUN_MARKER" in nexus.client.run_log("hello")
 
 
+def test_run_stop(nexus):
+    nexus.start(poll_interval="2s")
+    nexus.wait_for_socket()
+
+    status, _ = nexus.client.start_run("slow", "sh -c 'sleep 60'", str(nexus.home))
+    assert status == 201
+    assert _wait_run(nexus, "slow"), "run did not start"
+
+    status, _ = nexus.client.stop_run("slow")
+    assert status == 202, f"stop status {status}"
+
+    # A stopped run terminates and is recorded as failed (it did not complete).
+    run = _wait_run(nexus, "slow", status="failed", timeout=20)
+    assert run, "stopped run was not recorded as failed"
+
+
 def test_run_survives_runtime_restart(nexus):
     # A managed run is a child of nexus-pm, so killing the nexus runtime mid-run
     # must not kill it; the new runtime recovers and records its outcome.

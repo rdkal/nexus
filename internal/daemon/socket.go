@@ -40,6 +40,7 @@ func (d *Daemon) newMux() *http.ServeMux {
 	mux.HandleFunc("POST /runs", d.handleRunCreate)
 	mux.HandleFunc("GET /runs", d.handleRunList)
 	mux.HandleFunc("GET /runs/{name}/log", d.handleRunLog)
+	mux.HandleFunc("POST /runs/{name}/stop", d.handleRunStop)
 	mux.HandleFunc("DELETE /runs/{name}", d.handleRunDelete)
 	return mux
 }
@@ -616,6 +617,15 @@ func (d *Daemon) handleRunLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	serveLogFile(w, d.Paths.RunLog(run.Address, run.Name))
+}
+
+func (d *Daemon) handleRunStop(w http.ResponseWriter, r *http.Request) {
+	if err := d.stopManagedRun(r.PathValue("name")); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+	writeJSON(w, map[string]string{"stopping": r.PathValue("name")})
 }
 
 func (d *Daemon) handleRunDelete(w http.ResponseWriter, r *http.Request) {

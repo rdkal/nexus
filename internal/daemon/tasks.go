@@ -26,6 +26,7 @@ import (
 type taskExecutor interface {
 	StartRun(id string, spec supervisor.ServiceSpec) error
 	PollRun(id string) (supervisor.RunState, bool, error)
+	StopRun(id string)
 	AckRun(id string)
 }
 

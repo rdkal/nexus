@@ -146,6 +146,29 @@ func (d *Daemon) startManagedRun(name, command, cwd string) (int64, string, erro
 	return id, address, nil
 }
 
+// stopManagedRun signals a running managed run to terminate. The poll loop in
+// awaitManagedRun then observes the process exit and finalises the record (a
+// stopped run is recorded as failed, since it did not complete). Returns an error
+// if no run by that name is currently running.
+func (d *Daemon) stopManagedRun(name string) error {
+	run, ok, err := d.DB.GetRun(name)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("run %q not found", name)
+	}
+	if run.Status != "running" {
+		return fmt.Errorf("run %q is not running", name)
+	}
+	if d.taskExec == nil {
+		return fmt.Errorf("run executor not available")
+	}
+	d.taskExec.StopRun(managedRunKey(run.ID))
+	slog.Info("run: stop requested", "name", name, "id", run.ID)
+	return nil
+}
+
 // awaitManagedRun polls nexus-pm until the run finishes (or is lost) and finalises
 // its record. Runs under the daemon root context so it is not abandoned by a
 // redeploy; on shutdown it leaves the row 'running' for recoverManagedRuns.
