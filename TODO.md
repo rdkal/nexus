@@ -32,6 +32,7 @@
 | `nexus project add <spec-path[:name]>` CLI command | ✅ | ✅ | |
 | `nexus project remove <name>` CLI command | ✅ | ✅ | |
 | `nexus project set-src <name> <new-spec>` — repoint a moved repo; resolves the new spec, keeps name/ref/SHA history, daemon rebuilds live (reconcile diffs spec_path/subdir) | ✅ | ✅ | ✅ |
+| `nexus project set-ref <name> <ref>` — change a root project's tracked ref live; reconcile diffs ref, rebuilds (recovers at current SHA, then poller converges to the new ref with rollback safety) | ✅ | ✅ | ✅ |
 | `nexus project stop`/`start <name>` — pause/resume a project tree for maintenance; persisted (`stopped` column), survives daemon restart | ✅ | ✅ | ✅ |
 | `projects:` string shorthand — `<spec>@<ref>` (or bare `<spec>`) as an alternative to the `{src, ref}` map | ✅ | ✅ | ✅ |
 | Drop the mandatory `@` ref prefix — bare refs (`main`, `v15`, `latest`, `web-v*`); `@` only as the `spec@ref` separator | ✅ | ✅ | ✅ |

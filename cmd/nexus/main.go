@@ -416,10 +416,38 @@ func projectCmd(homeFlag *string) *cobra.Command {
 	cmd.AddCommand(projectAddCmd(homeFlag))
 	cmd.AddCommand(projectRemoveCmd(homeFlag))
 	cmd.AddCommand(projectSetSrcCmd(homeFlag))
+	cmd.AddCommand(projectSetRefCmd(homeFlag))
 	cmd.AddCommand(projectStopCmd(homeFlag))
 	cmd.AddCommand(projectStartCmd(homeFlag))
 	cmd.AddCommand(projectListCmd(homeFlag))
 	return cmd
+}
+
+// projectSetRefCmd changes the git ref a tracked project follows — a branch, tag,
+// `latest`, or a tag glob. The daemon re-resolves and redeploys the new ref live,
+// keeping the project's name and history; the deploy's build→verify→rollback keeps
+// the running services safe if the new ref is bad.
+func projectSetRefCmd(homeFlag *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "set-ref <name> <ref>",
+		Short: "Change the git ref a project tracks (branch, tag, latest, glob)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name, ref := args[0], args[1]
+			database, err := openDB(*homeFlag)
+			if err != nil {
+				return err
+			}
+			defer database.Close()
+
+			if err := database.SetProjectRef(name, ref); err != nil {
+				return err
+			}
+			fmt.Printf("set ref of %q to %s\n", name, ref)
+			notifyDaemon(*homeFlag) // ask a running daemon to re-resolve and redeploy
+			return nil
+		},
+	}
 }
 
 // projectSetSrcCmd repoints a tracked project at a new git location — for when a

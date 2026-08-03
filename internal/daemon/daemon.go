@@ -200,10 +200,13 @@ func (d *Daemon) reconcileRoots() {
 			continue
 		}
 		// A tracked project whose git location changed (its repo moved — `nexus
-		// project set-src`) is rebuilt from the new spec: stop the running instance
-		// and start a fresh one. specPath/subdir are set once at start, so reading
-		// them without ps.mu is safe. The name/address and SHA history are kept.
-		if ps.specPath != p.SpecPath || ps.subdir != p.Subdir {
+		// project set-src`) or whose tracked ref changed (`nexus project set-ref`) is
+		// rebuilt: stop the running instance and start a fresh one. specPath/subdir/
+		// ref are set once at start, so reading them without ps.mu is safe. The
+		// name/address and SHA history are kept; the fresh instance recovers at the
+		// current SHA (services stay up) and its poller then converges to the new
+		// ref's SHA with the normal build→verify→rollback safety.
+		if ps.specPath != p.SpecPath || ps.subdir != p.Subdir || ps.ref != p.Ref {
 			toStop = append(toStop, ps)
 			toStart = append(toStart, p)
 		}

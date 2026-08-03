@@ -45,14 +45,15 @@ path segment):
 nexus project add github.com/myorg/system-a
 nexus project add github.com/myorg/system-a:my-custom-name
 nexus project set-src my-system github.com/myorg/system-a-moved   # repo moved
+nexus project set-ref my-system v2.0.0                            # track a different ref
 nexus project stop my-system      # pause for maintenance (stays tracked)
 nexus project start my-system     # resume from the last deployed SHA
 nexus project remove my-system
 ```
 
-`add`, `remove`, `set-src`, `stop`, and `start` take effect immediately: the CLI updates the
-database and notifies the running daemon (`POST /projects` on the socket), which reconciles live —
-starting and stopping root projects without a restart.
+`add`, `remove`, `set-src`, `set-ref`, `stop`, and `start` take effect immediately: the CLI
+updates the database and notifies the running daemon (`POST /projects` on the socket), which
+reconciles live — starting and stopping root projects without a restart.
 
 `set-src` repoints a **root** project at a new git location — for when its repository moves (a
 rename, a new host, a monorepo split). The new spec is resolved the same way `add` resolves one
@@ -63,6 +64,14 @@ everything that refers to the project by address — its services, volumes, logs
 projects' `NEXUS_<PROJECT>_<VOLUME>` references — keeps working. (A **nested** project's location
 lives in its parent's `nexus.yaml` `src:` instead, so you move it by editing that `src:` and
 committing — the parent's next deploy rebuilds the child the same way, keeping its alias/address.)
+
+`set-ref` changes the ref a root project tracks — switch a branch, jump to a tag, move to
+`latest`, or change a tag glob — without re-adding it. Reconcile notices the changed ref and
+rebuilds the project: the fresh instance recovers at the current SHA (so services stay up), then
+its poller resolves the new ref and redeploys to it under the normal build→verify→rollback, so a
+bad ref can't take the project down — it just stays on the current commit. (For a **nested**
+project, set its ref in the parent's `nexus.yaml` — the `src: <spec>@<ref>` shorthand or the
+`{src, ref}` map — and commit.)
 
 `stop` pauses a project for a maintenance window: its services (and any nested sub-projects,
 recursively) are stopped, but its row and current SHA stay in the database, so it remains
