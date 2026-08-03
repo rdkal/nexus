@@ -743,8 +743,9 @@ composable core it would build on.
 ## Managed runs (host-registered operations)
 
 > Status: **implemented** (`nexus run` / `list` / `logs` / `stop` / `rm`, project-by-cwd, durable
-> across a runtime restart). Still to come: a `--project` override, `logs -f`, a docs-site section,
-> and a web UI Runs section — tracked in the TODO.
+> across a runtime restart; documented on the site). Still to come: a distinct `cancelled`/`stopped`
+> status (a stopped or interrupted run currently records as `failed`), a `--project` override,
+> `logs -f`, and a web UI Runs section — tracked in the TODO.
 
 Tasks and services both come *from git* — declared in a `nexus.yaml`, deployed through the poll
 loop. But an operator sometimes needs to kick off a **long-running, one-shot operation directly on
