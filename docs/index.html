@@ -686,6 +686,7 @@ nexus project stop &lt;name|address&gt;               pause: stop services, stay
                                                  (a root name or a nested address, e.g. retu/ingest)
 nexus project start &lt;name|address&gt;              resume from the last deployed SHA
 nexus project set-src &lt;name&gt; &lt;new-spec&gt;         repoint a moved repo (keeps name + history)
+nexus project set-ref &lt;name&gt; &lt;ref&gt;              track a different branch/tag/glob, live
 nexus project remove &lt;name&gt;                     forget a root project (stops it too)
 nexus service stop &lt;address&gt; &lt;service&gt;          pause one service inside a project
 nexus service start &lt;address&gt; &lt;service&gt;         resume a paused service

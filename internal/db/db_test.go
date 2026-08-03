@@ -104,6 +104,26 @@ func TestSetProjectSrc(t *testing.T) {
 	}
 }
 
+func TestSetProjectRef(t *testing.T) {
+	d := openDB(t)
+	if err := d.AddProject(db.Project{Name: "api", SpecPath: "github.com/x/api", Ref: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetProjectRef("api", "v2.0.0"); err != nil {
+		t.Fatalf("SetProjectRef: %v", err)
+	}
+	got, err := d.GetProject("api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Ref != "v2.0.0" || got.SpecPath != "github.com/x/api" {
+		t.Errorf("after set-ref = %+v", got)
+	}
+	if err := d.SetProjectRef("ghost", "main"); err == nil {
+		t.Error("set-ref on unknown project should error")
+	}
+}
+
 func TestRemoveNonexistent(t *testing.T) {
 	d := openDB(t)
 	if err := d.RemoveProject("ghost"); err == nil {

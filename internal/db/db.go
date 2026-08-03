@@ -260,6 +260,21 @@ func (d *DB) SetProjectSrc(name, specPath, subdir string) error {
 	return nil
 }
 
+// SetProjectRef updates the git ref a project tracks (branch, tag, latest, or a
+// tag glob), keeping everything else. The running daemon re-resolves and redeploys
+// the new ref live. Returns an error if the project is not found.
+func (d *DB) SetProjectRef(name, ref string) error {
+	res, err := d.conn.Exec(`UPDATE projects SET ref = ? WHERE name = ?`, ref, name)
+	if err != nil {
+		return fmt.Errorf("set ref for %q: %w", name, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("project %q not found", name)
+	}
+	return nil
+}
+
 // RemoveProject deletes a project by name. Returns an error if not found.
 func (d *DB) RemoveProject(name string) error {
 	res, err := d.conn.Exec(`DELETE FROM projects WHERE name = ?`, name)
