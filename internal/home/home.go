@@ -114,6 +114,16 @@ func (p Paths) TaskLog(address, task string) string {
 	return filepath.Join(p.LogDir(address), "tasks", task, "current.log")
 }
 
+// RunLog returns the log path for a managed run (nexus run). An unattached run
+// (empty address) logs under a top-level "_runs" namespace.
+// e.g. RunLog("my-system", "backfill") → <home>/logs/my-system/runs/backfill/current.log
+func (p Paths) RunLog(address, name string) string {
+	if address == "" {
+		return filepath.Join(p.Logs, "_runs", name, "current.log")
+	}
+	return filepath.Join(p.LogDir(address), "runs", name, "current.log")
+}
+
 // RepoDir returns the bare clone directory for a spec path.
 // e.g. RepoDir("github.com/myorg/api") → <home>/repos/github.com/myorg/api
 func (p Paths) RepoDir(specPath string) string {

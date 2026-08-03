@@ -110,6 +110,19 @@ class NexusClient:
     def run_task(self, address: str, task: str):
         return self._request("POST", f"/projects/{address}/tasks/{task}/run")
 
+    def list_runs(self):
+        _, body = self._request("GET", "/runs")
+        return body
+
+    def start_run(self, name: str, command: str, cwd: str):
+        return self._request(
+            "POST", "/runs", {"name": name, "command": command, "cwd": cwd}
+        )
+
+    def run_log(self, name: str):
+        _, body = self._request("GET", f"/runs/{name}/log")
+        return body
+
 
 # ---------------------------------------------------------------------------
 # Session fixture: build binaries once

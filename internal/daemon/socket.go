@@ -3,11 +3,13 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -32,6 +34,13 @@ func (d *Daemon) newMux() *http.ServeMux {
 	mux.HandleFunc("POST /projects", d.handleReconcile)
 	mux.HandleFunc("GET /projects/{rest...}", d.handleProjectGet)
 	mux.HandleFunc("POST /projects/{rest...}", d.handleProjectPost)
+	// Managed runs (nexus run): imperative, run-once host operations. Top-level
+	// because a run may be unattached to any project. Run names contain no slash,
+	// so {name} matches a single segment.
+	mux.HandleFunc("POST /runs", d.handleRunCreate)
+	mux.HandleFunc("GET /runs", d.handleRunList)
+	mux.HandleFunc("GET /runs/{name}/log", d.handleRunLog)
+	mux.HandleFunc("DELETE /runs/{name}", d.handleRunDelete)
 	return mux
 }
 
@@ -527,4 +536,108 @@ func (d *Daemon) restartService(w http.ResponseWriter, address, svc string) {
 
 	w.WriteHeader(http.StatusAccepted)
 	writeJSON(w, map[string]string{"restarted": key})
+}
+
+// --- managed runs (nexus run) ---
+
+type runRecord struct {
+	Name       string `json:"name"`
+	Address    string `json:"address"`
+	Command    string `json:"command"`
+	Status     string `json:"status"`
+	ExitCode   *int   `json:"exit_code,omitempty"`
+	StartedAt  int64  `json:"started_at"`
+	FinishedAt *int64 `json:"finished_at,omitempty"`
+}
+
+func toRunRecord(r db.Run) runRecord {
+	rec := runRecord{
+		Name:      r.Name,
+		Address:   r.Address,
+		Command:   r.Command,
+		Status:    r.Status,
+		ExitCode:  r.ExitCode,
+		StartedAt: r.StartedAt.Unix(),
+	}
+	if r.FinishedAt != nil {
+		t := r.FinishedAt.Unix()
+		rec.FinishedAt = &t
+	}
+	return rec
+}
+
+// handleRunCreate starts a managed run from {name, command, cwd}. The owning
+// project is resolved from cwd inside the daemon.
+func (d *Daemon) handleRunCreate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name    string `json:"name"`
+		Command string `json:"command"`
+		Cwd     string `json:"cwd"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	id, address, err := d.startManagedRun(req.Name, req.Command, req.Cwd)
+	if err != nil {
+		if errors.Is(err, db.ErrRunActive) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, map[string]any{"name": req.Name, "address": address, "id": id, "status": "running"})
+}
+
+func (d *Daemon) handleRunList(w http.ResponseWriter, r *http.Request) {
+	runs, err := d.DB.ListRuns(200)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := make([]runRecord, 0, len(runs))
+	for _, run := range runs {
+		out = append(out, toRunRecord(run))
+	}
+	writeJSON(w, out)
+}
+
+func (d *Daemon) handleRunLog(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	run, ok, err := d.DB.GetRun(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, "run not found", http.StatusNotFound)
+		return
+	}
+	serveLogFile(w, d.Paths.RunLog(run.Address, run.Name))
+}
+
+func (d *Daemon) handleRunDelete(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	run, ok, err := d.DB.GetRun(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, "run not found", http.StatusNotFound)
+		return
+	}
+	if run.Status == "running" {
+		http.Error(w, "run is still running", http.StatusConflict)
+		return
+	}
+	if _, err := d.DB.RemoveRun(name); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Best-effort log cleanup; the record is already gone.
+	_ = os.RemoveAll(filepath.Dir(d.Paths.RunLog(run.Address, run.Name)))
+	w.WriteHeader(http.StatusNoContent)
 }

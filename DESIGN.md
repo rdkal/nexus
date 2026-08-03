@@ -742,7 +742,9 @@ composable core it would build on.
 
 ## Managed runs (host-registered operations)
 
-> Status: **designed, not yet implemented.** This section is the spec; the TODO tracks the build.
+> Status: **implemented** (`nexus run` / `list` / `logs` / `rm`, project-by-cwd, durable across a
+> runtime restart). Still to come: `nexus run stop` (needs a kill primitive on nexus-pm's run API),
+> a `--project` override, `logs -f`, and a web UI Runs section — tracked in the TODO.
 
 Tasks and services both come *from git* — declared in a `nexus.yaml`, deployed through the poll
 loop. But an operator sometimes needs to kick off a **long-running, one-shot operation directly on
