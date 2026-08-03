@@ -242,6 +242,24 @@ func (d *DB) AddProject(p Project) error {
 	return nil
 }
 
+// SetProjectSrc updates a project's git location (resolved spec path and in-repo
+// subdir) in place, keeping its name, ref, and deployment history. Used when a
+// project's repository moves. Returns an error if the project is not found.
+func (d *DB) SetProjectSrc(name, specPath, subdir string) error {
+	res, err := d.conn.Exec(
+		`UPDATE projects SET spec_path = ?, subdir = ? WHERE name = ?`,
+		specPath, subdir, name,
+	)
+	if err != nil {
+		return fmt.Errorf("set src for %q: %w", name, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("project %q not found", name)
+	}
+	return nil
+}
+
 // RemoveProject deletes a project by name. Returns an error if not found.
 func (d *DB) RemoveProject(name string) error {
 	res, err := d.conn.Exec(`DELETE FROM projects WHERE name = ?`, name)

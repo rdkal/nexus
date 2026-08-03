@@ -44,14 +44,25 @@ path segment):
 ```sh
 nexus project add github.com/myorg/system-a
 nexus project add github.com/myorg/system-a:my-custom-name
+nexus project set-src my-system github.com/myorg/system-a-moved   # repo moved
 nexus project stop my-system      # pause for maintenance (stays tracked)
 nexus project start my-system     # resume from the last deployed SHA
 nexus project remove my-system
 ```
 
-`add`, `remove`, `stop`, and `start` take effect immediately: the CLI updates the database
-and notifies the running daemon (`POST /projects` on the socket), which reconciles live —
+`add`, `remove`, `set-src`, `stop`, and `start` take effect immediately: the CLI updates the
+database and notifies the running daemon (`POST /projects` on the socket), which reconciles live —
 starting and stopping root projects without a restart.
+
+`set-src` repoints a **root** project at a new git location — for when its repository moves (a
+rename, a new host, a monorepo split). The new spec is resolved the same way `add` resolves one
+(transport probing + repo-root walk-up), and the project keeps its **name, ref, and deployment
+history**; the daemon just rebuilds it from the new location (reconcile notices the changed spec
+path, stops the old instance, and starts a fresh one). Because the resource address is unchanged,
+everything that refers to the project by address — its services, volumes, logs, and other
+projects' `NEXUS_<PROJECT>_<VOLUME>` references — keeps working. (A **nested** project's location
+lives in its parent's `nexus.yaml` `src:` instead, so you move it by editing that `src:` and
+committing — the parent's next deploy rebuilds the child the same way, keeping its alias/address.)
 
 `stop` pauses a project for a maintenance window: its services (and any nested sub-projects,
 recursively) are stopped, but its row and current SHA stay in the database, so it remains
