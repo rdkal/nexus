@@ -97,6 +97,15 @@
 | Cross-project task triggers (a task in one project triggering one in another) | | | |
 | Web UI for tasks — project detail lists each task with trigger + last-run status, and a manual **Run** / **Retry** (on a failed task) button | ✅ | ✅ | ✅ |
 | Web UI for tasks — task graph view, per-task run history, next-fire time | | | |
+| **Managed runs (host-registered operations)** — imperative, run-once, durable long ops via `nexus run` (see DESIGN "Managed runs"); designed, not yet built |
+| `runs` table — name, owning address, command, workdir, status, exit, start/finish | ✅ | | |
+| `nexus run <name> -- <cmd>` — register + start; reuses the poll-and-recover run executor (child of nexus-pm, survives a runtime restart) | ✅ | | |
+| Project association by working directory — cwd inside a project's current worktree → that address scopes the run (deepest match); else unattached; `--project` override | ✅ | | |
+| Run-once contract — recorded outcome, never restarted on exit; interrupted (nexus-pm gone / reboot) → `failed`, surfaced for manual re-launch | ✅ | | |
+| Output capture to `logs/<address>/runs/<name>/current.log`; `nexus run logs <name> [-f]` | ✅ | | |
+| `nexus run list` / `stop` / `rm`; socket endpoints on `nexus.sock` | ✅ | | |
+| No-overlap — a live run `name` is unique per scope (partial unique index on `running`), same hard DB guarantee as tasks | ✅ | | |
+| Web UI — a Runs section on the project detail page (later) | | | |
 | **Volumes** |
 | Volume directory creation at `volumes/<address>/` on first use | ✅ | ✅ | |
 | **State persistence** |

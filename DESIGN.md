@@ -740,6 +740,97 @@ composable core it would build on.
 
 ---
 
+## Managed runs (host-registered operations)
+
+> Status: **designed, not yet implemented.** This section is the spec; the TODO tracks the build.
+
+Tasks and services both come *from git* — declared in a `nexus.yaml`, deployed through the poll
+loop. But an operator sometimes needs to kick off a **long-running, one-shot operation directly on
+the host** — a data backfill, a migration, a bulk import, a reindex — without editing a repo or
+waiting for a deploy. Today the only options are a bare `nohup … &` (no supervision, no logs, no
+record) or shoehorning it into a task (needs a commit, and it is really run-*once*, not scheduled).
+
+A **managed run** fills that gap: an imperative, run-once, durable operation you start from a
+script with the CLI. It is the missing quadrant of the execution model:
+
+| | Registered via | Trigger | Lifetime on exit |
+|---|---|---|---|
+| **Service** | `nexus.yaml` (declarative) | git deploy | restarted (it's a daemon) |
+| **Task** | `nexus.yaml` (declarative) | schedule / `after:` / manual | done (one-shot) |
+| **Managed run** (new) | `nexus run` (imperative) | manual, from the host | **done — not restarted** |
+
+### Interface
+
+```
+nexus run <name> -- <command…>     # register + start a durable run-once operation
+nexus run list                      # names, owning project, status, pid, started/finished
+nexus run logs <name> [-f]          # tail its captured output
+nexus run stop <name>               # signal a still-running operation to stop
+nexus run rm <name>                 # forget a finished run (and its log)
+```
+
+A host script just calls `nexus run backfill-2024 -- ./scripts/backfill.sh --year 2024`. It
+returns immediately; the operation runs in the background under supervision.
+
+### Project association by working directory
+
+A managed run is **scoped to a project automatically, by the directory it is launched from.** When
+you invoke `nexus run`, the CLI sends its current working directory; the runtime resolves the
+owning project as the one whose current deployment's app directory (the worktree that holds its
+`nexus.yaml`) **contains that cwd** — deepest match wins if projects nest. That project's address
+namespaces the run and it inherits the project's resolved environment and volumes, exactly like a
+task does.
+
+This is deliberately the same place a project's own `nexus.yaml` lives, so a script sitting next to
+`nexus.yaml` (or a task/service that shells out to `nexus run`, whose working directory is already
+the worktree) is attributed to its project with no flag to remember. A run launched from a
+directory under no known project worktree is **unattached** — a host-global run under a reserved
+scope — still supervised, logged, and recorded, just not tied to a project. (An explicit
+`--project <address>` override is available for the occasional cross-directory case.)
+
+### Execution, logs, and durability
+
+A managed run reuses the **poll-and-recover run executor that tasks already use** — the runtime
+records the run, hands the command to nexus-pm via `POST /run/<id>` (so the process is a child of
+**nexus-pm**, not the runtime), polls `GET /run/<id>` for the outcome, and finalises the record.
+Consequences, all inherited from that proven machinery:
+
+- **Survives a nexus runtime restart** (the common case — a self-update). The operation keeps
+  running as nexus-pm's child; the new runtime re-attaches by re-polling on startup and records the
+  outcome when it finishes. This is the headline "survives restarts" property.
+- **Output is captured** to `logs/<address>/runs/<name>/current.log` (or `logs/runs/<name>/` when
+  unattached), tail-able with `nexus run logs` and, later, the web UI — the same log tree as
+  services and tasks.
+- **A durable record** lives in a new `runs` table: name, owning address, command, working
+  directory, status (`running`/`success`/`failed`), exit code, start/finish. `nexus run list`
+  reads it, and it survives restarts.
+- **On exit it is done, not restarted** — the run-once contract. Its exit code is recorded; unlike
+  a service it is never re-spawned.
+
+**The survival boundary, stated honestly.** A managed run survives a *runtime* restart because the
+process lives under nexus-pm. It does **not** survive a *nexus-pm* restart or a **host reboot** —
+those kill the process (it is nexus-pm's child, and nexus reparents nothing to init). Because a
+run-once operation may be non-idempotent, recovery does **not** silently re-run it: on startup the
+runtime re-polls each `running` row, and a run nexus-pm no longer knows about is marked `failed`
+(interrupted), surfaced in `nexus run list` for the operator to re-launch deliberately. This is
+exactly how an interrupted task run is already handled.
+
+### No-overlap
+
+A run `name` must be unique among *running* managed runs in its scope, enforced by the same hard
+DB guarantee as tasks (a partial unique index on the `running` rows) — starting a second run with a
+live name is rejected, not silently duplicated. Finished runs of the same name are unconstrained,
+so a name can be reused once its previous run completes (or removed with `nexus run rm`).
+
+### What this is not
+
+A managed run is not a service (no restart-on-crash, no health in the project's rollup) and not a
+task (no schedule, no `after:` edges, not declared in git). It is intentionally the smallest thing
+that covers "run this long operation on the host, keep it supervised and logged, and tell me how it
+ended" — leaving scheduled/triggered orchestration to tasks.
+
+---
+
 ## Nexus Self-Update
 
 ### Three-process design
@@ -1045,6 +1136,9 @@ They are slower and intended to run in CI rather than on every save.
 - Python/iris web UI as a supervised nexus service (port 7777)
 - REST API served by the Python process
 - Tasks (scheduled & triggered) — cron/`@every`/`after:` triggers, manual `nexus task run`, one-shot execution, `task_runs` history (see the [Tasks](#tasks-scheduled--triggered) section)
+
+**Designed, not yet built:**
+- Managed runs — imperative, run-once, durable host operations via `nexus run`, scoped to a project by working directory (see the [Managed runs](#managed-runs-host-registered-operations) section)
 
 **Explicitly deferred:**
 - Flows / pipelines — the fully general version of tasks (fan-in joins, failure-mode/conditional edges, cross-project triggers, approvals); tasks-with-triggers is the composable core it builds on
