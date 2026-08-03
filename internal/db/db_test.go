@@ -73,6 +73,37 @@ func TestRemoveProject(t *testing.T) {
 	}
 }
 
+func TestSetProjectSrc(t *testing.T) {
+	d := openDB(t)
+	must := d.AddProject(db.Project{Name: "api", SpecPath: "github.com/old/api", Ref: "main"})
+	if must != nil {
+		t.Fatal(must)
+	}
+	if err := d.SetCurrentSHA("api", "sha1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Repoint at a new location + subdir; name, ref, and SHA are preserved.
+	if err := d.SetProjectSrc("api", "github.com/new/monorepo", "services/api"); err != nil {
+		t.Fatalf("SetProjectSrc: %v", err)
+	}
+	got, err := d.GetProject("api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SpecPath != "github.com/new/monorepo" || got.Subdir != "services/api" {
+		t.Errorf("after set-src = %+v", got)
+	}
+	if got.Ref != "main" || got.CurrentSHA != "sha1" {
+		t.Errorf("set-src should preserve ref/sha, got %+v", got)
+	}
+
+	// Unknown project is an error.
+	if err := d.SetProjectSrc("ghost", "github.com/x/y", ""); err == nil {
+		t.Error("set-src on unknown project should error")
+	}
+}
+
 func TestRemoveNonexistent(t *testing.T) {
 	d := openDB(t)
 	if err := d.RemoveProject("ghost"); err == nil {

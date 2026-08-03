@@ -415,10 +415,47 @@ func projectCmd(homeFlag *string) *cobra.Command {
 	}
 	cmd.AddCommand(projectAddCmd(homeFlag))
 	cmd.AddCommand(projectRemoveCmd(homeFlag))
+	cmd.AddCommand(projectSetSrcCmd(homeFlag))
 	cmd.AddCommand(projectStopCmd(homeFlag))
 	cmd.AddCommand(projectStartCmd(homeFlag))
 	cmd.AddCommand(projectListCmd(homeFlag))
 	return cmd
+}
+
+// projectSetSrcCmd repoints a tracked project at a new git location — for when a
+// repository moves. The new spec is resolved (transport + repo-root walk-up) like
+// `add`; the project keeps its name, ref, and deployment history, and the daemon
+// rebuilds it from the new location live.
+func projectSetSrcCmd(homeFlag *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "set-src <name> <new-spec-path>",
+		Short: "Point a project at a new git location (its repo moved), keeping history",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name, specPath := args[0], args[1]
+			root, subdir, rerr := git.ResolveRepoRoot(specPath)
+			if rerr != nil {
+				return fmt.Errorf("could not find a git repository for %q: %w\n"+
+					"check the spec path, your network, and git credentials", specPath, rerr)
+			}
+			database, err := openDB(*homeFlag)
+			if err != nil {
+				return err
+			}
+			defer database.Close()
+
+			if err := database.SetProjectSrc(name, root, subdir); err != nil {
+				return err
+			}
+			if subdir != "" {
+				fmt.Printf("set src of %q  repo=%s  subdir=%s\n", name, root, subdir)
+			} else {
+				fmt.Printf("set src of %q  src=%s\n", name, root)
+			}
+			notifyDaemon(*homeFlag) // ask a running daemon to rebuild from the new location
+			return nil
+		},
+	}
 }
 
 // projectStopCmd pauses a project: its services (and nested sub-projects) stop.

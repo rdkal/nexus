@@ -136,6 +136,7 @@ nexus project list                              projects with their SHA and stat
 nexus project stop <name|address>               pause: stop services, stay tracked
                                                  (a root name or a nested address, e.g. retu/ingest)
 nexus project start <name|address>              resume from the last deployed SHA
+nexus project set-src <name> <new-spec>         repoint a moved repo (keeps name + history)
 nexus project remove <name>                     forget a root project (stops it too)
 nexus service stop <address> <service>          pause one service inside a project
 nexus service start <address> <service>         resume a paused service

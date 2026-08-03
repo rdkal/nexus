@@ -77,13 +77,13 @@ type Daemon struct {
 // identically; a sub-project simply carries a non-nil alias chain and a distinct
 // root spec path for worktree placement.
 type projectState struct {
-	address      string // resource address; root name, or "<root>/<alias>/..." for sub-projects
-	specPath     string // this project's own git repo spec path
-	rootSpecPath string // root deployment's spec path (for worktree placement)
-	ref          string // ref being tracked (e.g. "@main")
-	aliases      []string // alias chain from root; nil for root projects
-	subdir       string   // in-repo path to this app's nexus.yaml ("" = repo root)
-	recoverSHA   string   // SHA to recover on startup ("" = never deployed)
+	address      string            // resource address; root name, or "<root>/<alias>/..." for sub-projects
+	specPath     string            // this project's own git repo spec path
+	rootSpecPath string            // root deployment's spec path (for worktree placement)
+	ref          string            // ref being tracked (e.g. "@main")
+	aliases      []string          // alias chain from root; nil for root projects
+	subdir       string            // in-repo path to this app's nexus.yaml ("" = repo root)
+	recoverSHA   string            // SHA to recover on startup ("" = never deployed)
 	src          string            // raw external src (before repo-root resolution); "" for roots
 	parentEnv    map[string]string // environment: the parent set on this sub-project's entry (nil for roots)
 
@@ -192,12 +192,22 @@ func (d *Daemon) reconcileRoots() {
 
 	d.mu.RLock()
 	var toStart []db.Project
+	var toStop []*projectState
 	for name, p := range want {
-		if _, ok := d.projects[name]; !ok {
+		ps, ok := d.projects[name]
+		if !ok {
+			toStart = append(toStart, p) // newly added or resumed
+			continue
+		}
+		// A tracked project whose git location changed (its repo moved — `nexus
+		// project set-src`) is rebuilt from the new spec: stop the running instance
+		// and start a fresh one. specPath/subdir are set once at start, so reading
+		// them without ps.mu is safe. The name/address and SHA history are kept.
+		if ps.specPath != p.SpecPath || ps.subdir != p.Subdir {
+			toStop = append(toStop, ps)
 			toStart = append(toStart, p)
 		}
 	}
-	var toStop []*projectState
 	for addr, ps := range d.projects {
 		if len(ps.aliases) != 0 {
 			continue // external sub-project — owned by its parent, not the DB
