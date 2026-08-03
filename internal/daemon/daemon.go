@@ -61,6 +61,11 @@ type Daemon struct {
 	// when it supports it; injectable in tests. Nil disables task execution.
 	taskExec taskExecutor
 
+	// taskPollInterval is how often awaitTaskRun polls nexus-pm for a run's
+	// outcome. A per-daemon field (not a global) so tests can shorten it without
+	// racing another test's still-running poll goroutines. Defaults to 1s in New.
+	taskPollInterval time.Duration
+
 	mu sync.RWMutex
 	// projects holds every live project keyed by resource address. This includes
 	// both root projects and discovered external sub-projects (e.g. "my-system/db").
@@ -103,11 +108,12 @@ func New(database *db.DB, sup SupervisorAPI, paths home.Paths) *Daemon {
 		selfSpec = v // may be empty, which disables self-update restarts
 	}
 	d := &Daemon{
-		DB:           database,
-		Sup:          sup,
-		Paths:        paths,
-		SelfSpecPath: selfSpec,
-		projects:     make(map[string]*projectState),
+		DB:               database,
+		Sup:              sup,
+		Paths:            paths,
+		SelfSpecPath:     selfSpec,
+		projects:         make(map[string]*projectState),
+		taskPollInterval: time.Second,
 	}
 	// Tasks run through the supervisor's one-shot run API (nexus-pm in production).
 	if te, ok := sup.(taskExecutor); ok {
