@@ -85,6 +85,7 @@ func (s *pmServer) serve(ctx context.Context, paths home.Paths) error {
 	mux.HandleFunc("GET /services/{key...}", s.handleStatus)
 	mux.HandleFunc("POST /run/{id}", s.handleRunStart)
 	mux.HandleFunc("GET /run/{id}", s.handleRunPoll)
+	mux.HandleFunc("POST /run/{id}/stop", s.handleRunStop)
 	mux.HandleFunc("DELETE /run/{id}", s.handleRunAck)
 	mux.HandleFunc("POST /runtime/restart", s.handleRuntimeRestart)
 
@@ -159,6 +160,12 @@ func (s *pmServer) handleRunPoll(w http.ResponseWriter, r *http.Request) {
 		ExitCode int    `json:"exit_code"`
 		Error    string `json:"error,omitempty"`
 	}{Status: status, ExitCode: state.ExitCode, Error: state.Err})
+}
+
+// handleRunStop signals a running one-shot run to terminate (SIGTERM→SIGKILL).
+func (s *pmServer) handleRunStop(w http.ResponseWriter, r *http.Request) {
+	s.sup.StopRun(r.PathValue("id"))
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // handleRunAck drops a run record once the runtime has recorded its outcome.

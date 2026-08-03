@@ -141,6 +141,37 @@ func TestManagedRun_DeepestProjectWins(t *testing.T) {
 	}
 }
 
+func TestManagedRun_Stop(t *testing.T) {
+	d, fe, dir := newTaskTestDaemon(t)
+	injectTaskProject(d, dir, &config.ProjectFile{})
+
+	id, _, err := d.startManagedRun("long", "sleep 100", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = nextStart(t, fe) // run is live
+
+	// Stopping a running run signals it; the poll loop then records it failed.
+	if err := d.stopManagedRun("long"); err != nil {
+		t.Fatalf("stopManagedRun: %v", err)
+	}
+	fe.mu.Lock()
+	gotStop := len(fe.stopped) == 1 && fe.stopped[0] == managedRunKey(id)
+	fe.mu.Unlock()
+	if !gotStop {
+		t.Errorf("StopRun not called with the run key")
+	}
+	waitRunStatus(t, d, "long", "failed")
+
+	// Stopping a run that is not running is an error.
+	if err := d.stopManagedRun("long"); err == nil {
+		t.Error("stopping a finished run should error")
+	}
+	if err := d.stopManagedRun("ghost"); err == nil {
+		t.Error("stopping an unknown run should error")
+	}
+}
+
 func TestManagedRun_RecoverInFlight(t *testing.T) {
 	d, fe, dir := newTaskTestDaemon(t)
 	injectTaskProject(d, dir, &config.ProjectFile{})

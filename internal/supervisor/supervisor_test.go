@@ -149,6 +149,45 @@ func TestStop_SIGTERMsRunningProcess(t *testing.T) {
 	}
 }
 
+func TestStopRun_SignalsRunningRun(t *testing.T) {
+	var proc *testProcess
+	sup := &supervisor.Supervisor{
+		Runner: supervisor.RunnerFunc(func(_ supervisor.ServiceSpec) (supervisor.Process, error) {
+			proc = blockProc()
+			return proc, nil
+		}),
+	}
+	if err := sup.StartRun("r1", supervisor.ServiceSpec{}); err != nil {
+		t.Fatal(err)
+	}
+	if st, known, _ := sup.PollRun("r1"); !known || st.Done {
+		t.Fatalf("expected a live run: known=%v done=%v", known, st.Done)
+	}
+
+	sup.StopRun("r1") // sends SIGTERM → testProcess.Signal closes exitCh → Wait returns
+
+	deadline := time.After(time.Second)
+	for {
+		if st, _, _ := sup.PollRun("r1"); st.Done {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("run did not finish after StopRun")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	select {
+	case <-proc.exitCh:
+	default:
+		t.Error("process was not signaled by StopRun")
+	}
+
+	// StopRun on an unknown id is a harmless no-op.
+	sup.StopRun("nope")
+}
+
 func TestRestart_OnUnexpectedExit(t *testing.T) {
 	sup := &supervisor.Supervisor{
 		Runner:      supervisor.RunnerFunc(func(_ supervisor.ServiceSpec) (supervisor.Process, error) { return crashProc(), nil }),

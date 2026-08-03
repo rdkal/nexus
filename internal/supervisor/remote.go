@@ -114,6 +114,14 @@ func (r *RemoteSupervisor) PollRun(id string) (state RunState, known bool, err e
 	return RunState{Done: out.Status == "done", ExitCode: out.ExitCode, Err: out.Error}, true, nil
 }
 
+// StopRun asks nexus-pm to signal a running one-shot run to terminate.
+func (r *RemoteSupervisor) StopRun(id string) {
+	resp, err := r.client.Post("http://nexus-pm/run/"+id+"/stop", "", nil)
+	if err == nil {
+		resp.Body.Close()
+	}
+}
+
 // AckRun tells nexus-pm the run outcome has been recorded and can be dropped.
 func (r *RemoteSupervisor) AckRun(id string) {
 	req, _ := http.NewRequest(http.MethodDelete, "http://nexus-pm/run/"+id, nil)

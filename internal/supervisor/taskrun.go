@@ -2,8 +2,12 @@ package supervisor
 
 import (
 	"sync"
+	"syscall"
 	"time"
 )
+
+// runStopGrace is the SIGTERM-to-SIGKILL window for a stopped one-shot run.
+const runStopGrace = 10 * time.Second
 
 // RunState is a snapshot of a one-shot task run.
 type RunState struct {
@@ -82,6 +86,38 @@ func (s *Supervisor) PollRun(id string) (state RunState, known bool, err error) 
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	return RunState{Done: tr.done, ExitCode: tr.exit, Err: tr.err}, true, nil
+}
+
+// StopRun signals a running one-shot run to terminate: SIGTERM now, then SIGKILL
+// if it has not exited within the grace window. A no-op for an unknown or already
+// finished run. Non-blocking — the caller observes the outcome via PollRun.
+func (s *Supervisor) StopRun(id string) {
+	s.runsMu.Lock()
+	tr, ok := s.runs[id]
+	s.runsMu.Unlock()
+	if !ok {
+		return
+	}
+	tr.mu.Lock()
+	done, proc := tr.done, tr.proc
+	tr.mu.Unlock()
+	if done || proc == nil {
+		return
+	}
+	_ = proc.Signal(syscall.SIGTERM)
+	go func() {
+		deadline := time.Now().Add(runStopGrace)
+		for time.Now().Before(deadline) {
+			tr.mu.Lock()
+			d := tr.done
+			tr.mu.Unlock()
+			if d {
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		_ = proc.Signal(syscall.SIGKILL)
+	}()
 }
 
 // AckRun drops a run record once the caller has recorded its outcome.
