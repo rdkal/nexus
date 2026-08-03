@@ -161,7 +161,8 @@ func TestManagedRun_Stop(t *testing.T) {
 	if !gotStop {
 		t.Errorf("StopRun not called with the run key")
 	}
-	waitRunStatus(t, d, "long", "failed")
+	// A stop the operator requested is recorded distinctly as cancelled.
+	waitRunStatus(t, d, "long", "cancelled")
 
 	// Stopping a run that is not running is an error.
 	if err := d.stopManagedRun("long"); err == nil {

@@ -55,9 +55,9 @@ def test_run_stop(nexus):
     status, _ = nexus.client.stop_run("slow")
     assert status == 202, f"stop status {status}"
 
-    # A stopped run terminates and is recorded as failed (it did not complete).
-    run = _wait_run(nexus, "slow", status="failed", timeout=20)
-    assert run, "stopped run was not recorded as failed"
+    # A stopped run terminates and is recorded distinctly as cancelled.
+    run = _wait_run(nexus, "slow", status="cancelled", timeout=20)
+    assert run, "stopped run was not recorded as cancelled"
 
 
 def test_run_survives_runtime_restart(nexus):

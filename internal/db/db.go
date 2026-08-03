@@ -69,21 +69,22 @@ CREATE TABLE IF NOT EXISTS task_runs (
 
 -- One row per managed run: an imperative, run-once, durable host operation
 -- (nexus run). address is the owning project ('' = unattached). status starts
--- 'running' and is finalised on exit; a run is never restarted.
+-- 'running' and is finalised on exit; a run is never restarted. stop_requested is
+-- set when the operator asks to stop it, so the finaliser records 'cancelled'
+-- (rather than 'failed') even across a runtime restart.
 CREATE TABLE IF NOT EXISTS runs (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT NOT NULL,
-    address     TEXT NOT NULL DEFAULT '',  -- owning project address; '' = unattached
-    command     TEXT NOT NULL,
-    workdir     TEXT NOT NULL,
-    status      TEXT NOT NULL CHECK(status IN ('running','success','failed')),
-    exit_code   INTEGER,
-    started_at  INTEGER NOT NULL,
-    finished_at INTEGER
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    name           TEXT NOT NULL,
+    address        TEXT NOT NULL DEFAULT '',  -- owning project address; '' = unattached
+    command        TEXT NOT NULL,
+    workdir        TEXT NOT NULL,
+    status         TEXT NOT NULL CHECK(status IN ('running','success','failed','cancelled')),
+    exit_code      INTEGER,
+    stop_requested INTEGER NOT NULL DEFAULT 0,
+    started_at     INTEGER NOT NULL,
+    finished_at    INTEGER
 );
--- Hard no-overlap: at most one 'running' run per name. A brand-new table in this
--- version, so (unlike task_runs) the index is safe to create directly here — no
--- older build ever wrote rows that could already collide.
+-- Hard no-overlap: at most one 'running' run per name.
 CREATE UNIQUE INDEX IF NOT EXISTS ux_runs_running ON runs(name) WHERE status = 'running';
 `
 
@@ -150,7 +151,70 @@ func migrate(conn *sql.DB) error {
 			return fmt.Errorf("migrate %q: %w", stmt, err)
 		}
 	}
-	return nil
+	return migrateRunsStatus(conn)
+}
+
+// migrateRunsStatus upgrades a runs table created before the 'cancelled' status
+// and the stop_requested column. SQLite can't alter a CHECK constraint in place,
+// so the table is rebuilt. Detected by the absence of stop_requested; a no-op on
+// a fresh DB (the schema above already has the new shape).
+func migrateRunsStatus(conn *sql.DB) error {
+	has, err := columnExists(conn, "runs", "stop_requested")
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+	stmts := []string{
+		`CREATE TABLE runs_new (
+		    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+		    name           TEXT NOT NULL,
+		    address        TEXT NOT NULL DEFAULT '',
+		    command        TEXT NOT NULL,
+		    workdir        TEXT NOT NULL,
+		    status         TEXT NOT NULL CHECK(status IN ('running','success','failed','cancelled')),
+		    exit_code      INTEGER,
+		    stop_requested INTEGER NOT NULL DEFAULT 0,
+		    started_at     INTEGER NOT NULL,
+		    finished_at    INTEGER
+		)`,
+		`INSERT INTO runs_new (id, name, address, command, workdir, status, exit_code, started_at, finished_at)
+		 SELECT id, name, address, command, workdir, status, exit_code, started_at, finished_at FROM runs`,
+		`DROP TABLE runs`,
+		`ALTER TABLE runs_new RENAME TO runs`,
+		`CREATE UNIQUE INDEX ux_runs_running ON runs(name) WHERE status = 'running'`,
+	}
+	tx, err := conn.Begin()
+	if err != nil {
+		return fmt.Errorf("migrate runs: %w", err)
+	}
+	defer tx.Rollback()
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("migrate runs %q: %w", stmt, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// columnExists reports whether table has a column of the given name.
+func columnExists(conn *sql.DB, table, column string) (bool, error) {
+	rows, err := conn.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return false, fmt.Errorf("table info %q: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // Close closes the database connection.
@@ -392,15 +456,16 @@ func scanTaskRuns(rows *sql.Rows) ([]TaskRun, error) {
 
 // Run is one managed run: an imperative, run-once, durable host operation.
 type Run struct {
-	ID         int64
-	Name       string
-	Address    string // owning project; "" = unattached
-	Command    string
-	WorkDir    string
-	Status     string // running | success | failed
-	ExitCode   *int
-	StartedAt  time.Time
-	FinishedAt *time.Time
+	ID            int64
+	Name          string
+	Address       string // owning project; "" = unattached
+	Command       string
+	WorkDir       string
+	Status        string // running | success | failed | cancelled
+	ExitCode      *int
+	StopRequested bool // operator asked to stop it → finalise as 'cancelled'
+	StartedAt     time.Time
+	FinishedAt    *time.Time
 }
 
 // ErrRunActive is returned by AddRun when a run with the same name is already in
@@ -435,10 +500,30 @@ func (d *DB) FinishRun(id int64, status string, exitCode int, finishedAt time.Ti
 	return nil
 }
 
+// MarkRunStopRequested flags a run as stop-requested, so the finaliser records it
+// as 'cancelled' rather than 'failed' — durable, so it holds across a restart.
+func (d *DB) MarkRunStopRequested(id int64) error {
+	_, err := d.conn.Exec(`UPDATE runs SET stop_requested = 1 WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("mark run %d stop-requested: %w", id, err)
+	}
+	return nil
+}
+
+// RunStopRequested reports whether a run (by id) has been flagged stop-requested.
+func (d *DB) RunStopRequested(id int64) (bool, error) {
+	var v int
+	err := d.conn.QueryRow(`SELECT stop_requested FROM runs WHERE id = ?`, id).Scan(&v)
+	if err != nil {
+		return false, fmt.Errorf("run %d stop-requested: %w", id, err)
+	}
+	return v != 0, nil
+}
+
 // GetRun returns the most recent run with the given name, and whether one exists.
 func (d *DB) GetRun(name string) (Run, bool, error) {
 	rows, err := d.conn.Query(
-		`SELECT id, name, address, command, workdir, status, exit_code, started_at, finished_at
+		`SELECT id, name, address, command, workdir, status, exit_code, stop_requested, started_at, finished_at
 		 FROM runs WHERE name = ? ORDER BY id DESC LIMIT 1`, name,
 	)
 	if err != nil {
@@ -455,7 +540,7 @@ func (d *DB) GetRun(name string) (Run, bool, error) {
 // ListRuns returns up to limit managed runs, newest first.
 func (d *DB) ListRuns(limit int) ([]Run, error) {
 	rows, err := d.conn.Query(
-		`SELECT id, name, address, command, workdir, status, exit_code, started_at, finished_at
+		`SELECT id, name, address, command, workdir, status, exit_code, stop_requested, started_at, finished_at
 		 FROM runs ORDER BY started_at DESC, id DESC LIMIT ?`, limit,
 	)
 	if err != nil {
@@ -469,7 +554,7 @@ func (d *DB) ListRuns(limit int) ([]Run, error) {
 // re-polls nexus-pm for each on startup to finalise runs left in flight.
 func (d *DB) RunningRuns() ([]Run, error) {
 	rows, err := d.conn.Query(
-		`SELECT id, name, address, command, workdir, status, exit_code, started_at, finished_at
+		`SELECT id, name, address, command, workdir, status, exit_code, stop_requested, started_at, finished_at
 		 FROM runs WHERE status = 'running' ORDER BY id`,
 	)
 	if err != nil {
@@ -495,9 +580,11 @@ func scanRuns(rows *sql.Rows) ([]Run, error) {
 		var exit *int64
 		var started int64
 		var finished *int64
-		if err := rows.Scan(&r.ID, &r.Name, &r.Address, &r.Command, &r.WorkDir, &r.Status, &exit, &started, &finished); err != nil {
+		var stopReq int
+		if err := rows.Scan(&r.ID, &r.Name, &r.Address, &r.Command, &r.WorkDir, &r.Status, &exit, &stopReq, &started, &finished); err != nil {
 			return nil, err
 		}
+		r.StopRequested = stopReq != 0
 		r.StartedAt = time.Unix(started, 0)
 		if exit != nil {
 			e := int(*exit)
