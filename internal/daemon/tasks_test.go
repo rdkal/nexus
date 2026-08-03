@@ -62,7 +62,6 @@ func (f *fakeExec) complete(id string, exit int) {
 
 func newTaskTestDaemon(t *testing.T) (*Daemon, *fakeExec, string) {
 	t.Helper()
-	taskPollInterval = 5 * time.Millisecond
 	dir := t.TempDir()
 	database, err := db.Open(filepath.Join(dir, "nexus.db"))
 	if err != nil {
@@ -70,6 +69,7 @@ func newTaskTestDaemon(t *testing.T) (*Daemon, *fakeExec, string) {
 	}
 	t.Cleanup(func() { database.Close() })
 	d := New(database, plainSup{}, home.NewPaths(dir))
+	d.taskPollInterval = 5 * time.Millisecond // this daemon only; no shared global
 	fe := newFakeExec()
 	d.taskExec = fe
 	d.ctx = context.Background()

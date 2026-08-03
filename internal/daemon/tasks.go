@@ -20,10 +20,6 @@ import (
 	"github.com/rdkal/nexus/internal/supervisor"
 )
 
-// taskPollInterval is how often the runtime polls nexus-pm for a run's outcome.
-// A var so tests can shorten it.
-var taskPollInterval = time.Second
-
 // taskExecutor runs one-shot task commands out-of-process (in nexus-pm) so they
 // survive a runtime restart, and lets the runtime poll for their outcome by id.
 // Both *supervisor.Supervisor and *supervisor.RemoteSupervisor satisfy it.
@@ -275,7 +271,7 @@ func (d *Daemon) awaitTaskRun(address, task string, id int64) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(taskPollInterval):
+		case <-time.After(d.taskPollInterval):
 		}
 	}
 }
