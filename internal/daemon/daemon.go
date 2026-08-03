@@ -147,6 +147,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// Resume polling for any task run left in-flight when the runtime last stopped
 	// (it kept running under nexus-pm across the restart).
 	d.recoverTaskRuns()
+	// Likewise for managed runs (nexus run) — re-attach to any still running under
+	// nexus-pm so their outcome is recorded rather than left dangling.
+	d.recoverManagedRuns()
 	return d.serve(ctx)
 }
 

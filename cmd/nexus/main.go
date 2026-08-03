@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -108,12 +109,18 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(projectCmd(&homeFlag))
 	root.AddCommand(serviceCmd(&homeFlag))
 	root.AddCommand(taskCmd(&homeFlag))
+	root.AddCommand(runCmd(&homeFlag))
 	root.AddCommand(versionCmd())
 	return root
 }
 
 // daemonDo makes a request to the running daemon over its Unix socket.
 func daemonDo(homeFlag, method, path string) (int, []byte, error) {
+	return daemonDoBody(homeFlag, method, path, nil)
+}
+
+// daemonDoBody is daemonDo with an optional JSON request body.
+func daemonDoBody(homeFlag, method, path string, body io.Reader) (int, []byte, error) {
 	homeDir, err := resolveHome(homeFlag)
 	if err != nil {
 		return 0, nil, err
@@ -128,17 +135,20 @@ func daemonDo(homeFlag, method, path string) (int, []byte, error) {
 			},
 		},
 	}
-	req, err := http.NewRequest(method, "http://nexus"+path, nil)
+	req, err := http.NewRequest(method, "http://nexus"+path, body)
 	if err != nil {
 		return 0, nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("daemon not reachable at %s: %w", sock, err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, body, nil
+	respBody, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, respBody, nil
 }
 
 func taskCmd(homeFlag *string) *cobra.Command {
@@ -207,6 +217,130 @@ func taskListCmd(homeFlag *string) *cobra.Command {
 				}
 				fmt.Printf("%-19s  %-16s  %-8s  %s%s\n", when, r.Task, r.Status, r.Reason, exit)
 			}
+			return nil
+		},
+	}
+}
+
+// runCmd is `nexus run` — start a durable, run-once host operation — plus its
+// list/logs/rm subcommands. The owning project is inferred from the working
+// directory server-side.
+func runCmd(homeFlag *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "run <name> -- <command>...",
+		Short: "Start a durable, run-once host operation",
+		Long: "Start a long-running one-shot operation on the host, supervised and logged.\n" +
+			"It survives a nexus runtime restart and its outcome is recorded. The owning\n" +
+			"project is inferred from the current directory (where its nexus.yaml lives).\n\n" +
+			"Example:\n  nexus run backfill-2024 -- ./scripts/backfill.sh --year 2024",
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dash := cmd.ArgsLenAtDash()
+			if dash != 1 {
+				return fmt.Errorf("usage: nexus run <name> -- <command>")
+			}
+			name := args[0]
+			command := strings.Join(args[dash:], " ")
+			if strings.TrimSpace(command) == "" {
+				return fmt.Errorf("usage: nexus run <name> -- <command>")
+			}
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			payload, _ := json.Marshal(map[string]string{"name": name, "command": command, "cwd": cwd})
+			code, body, err := daemonDoBody(*homeFlag, "POST", "/runs", bytes.NewReader(payload))
+			if err != nil {
+				return err
+			}
+			if code != http.StatusCreated {
+				return fmt.Errorf("%s", strings.TrimSpace(string(body)))
+			}
+			fmt.Printf("started run %q\n", name)
+			return nil
+		},
+	}
+	cmd.AddCommand(runListCmd(homeFlag), runLogsCmd(homeFlag), runRmCmd(homeFlag))
+	return cmd
+}
+
+func runListCmd(homeFlag *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List managed runs",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			code, body, err := daemonDo(*homeFlag, "GET", "/runs")
+			if err != nil {
+				return err
+			}
+			if code != http.StatusOK {
+				return fmt.Errorf("%s", strings.TrimSpace(string(body)))
+			}
+			var runs []struct {
+				Name      string `json:"name"`
+				Address   string `json:"address"`
+				Status    string `json:"status"`
+				ExitCode  *int   `json:"exit_code"`
+				StartedAt int64  `json:"started_at"`
+			}
+			if err := json.Unmarshal(body, &runs); err != nil {
+				return err
+			}
+			if len(runs) == 0 {
+				fmt.Println("no runs")
+				return nil
+			}
+			for _, r := range runs {
+				when := time.Unix(r.StartedAt, 0).Format("2006-01-02 15:04:05")
+				scope := r.Address
+				if scope == "" {
+					scope = "-"
+				}
+				exit := ""
+				if r.ExitCode != nil {
+					exit = fmt.Sprintf(" exit=%d", *r.ExitCode)
+				}
+				fmt.Printf("%-19s  %-20s  %-16s  %-8s%s\n", when, r.Name, scope, r.Status, exit)
+			}
+			return nil
+		},
+	}
+}
+
+func runLogsCmd(homeFlag *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "logs <name>",
+		Short: "Show a managed run's captured output",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			code, body, err := daemonDo(*homeFlag, "GET", "/runs/"+args[0]+"/log")
+			if err != nil {
+				return err
+			}
+			if code != http.StatusOK {
+				return fmt.Errorf("%s", strings.TrimSpace(string(body)))
+			}
+			os.Stdout.Write(body)
+			return nil
+		},
+	}
+}
+
+func runRmCmd(homeFlag *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "rm <name>",
+		Short: "Remove a finished managed run's record and log",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			code, body, err := daemonDo(*homeFlag, "DELETE", "/runs/"+args[0])
+			if err != nil {
+				return err
+			}
+			if code != http.StatusNoContent {
+				return fmt.Errorf("%s", strings.TrimSpace(string(body)))
+			}
+			fmt.Printf("removed run %q\n", args[0])
 			return nil
 		},
 	}

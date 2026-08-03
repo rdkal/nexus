@@ -352,6 +352,73 @@ func TestMigrate_CollapsesDuplicateRunningRows(t *testing.T) {
 	}
 }
 
+func TestRuns_AddFinishListRemove(t *testing.T) {
+	d := openDB(t)
+
+	id, err := d.AddRun("backfill", "app", "./backfill.sh", "/work/app", time.Now())
+	if err != nil {
+		t.Fatalf("AddRun: %v", err)
+	}
+
+	// A second run with the same live name is rejected (hard no-overlap).
+	if _, err := d.AddRun("backfill", "app", "x", "/work/app", time.Now()); !errors.Is(err, db.ErrRunActive) {
+		t.Fatalf("duplicate live name err = %v, want ErrRunActive", err)
+	}
+
+	// GetRun returns the current record.
+	got, ok, err := d.GetRun("backfill")
+	if err != nil || !ok {
+		t.Fatalf("GetRun: ok=%v err=%v", ok, err)
+	}
+	if got.Address != "app" || got.Command != "./backfill.sh" || got.Status != "running" {
+		t.Errorf("run = %+v", got)
+	}
+
+	// After finishing, the name frees and can be reused.
+	if err := d.FinishRun(id, "success", 0, time.Now()); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+	if _, err := d.AddRun("backfill", "app", "again", "/work/app", time.Now()); err != nil {
+		t.Errorf("reuse after finish rejected: %v", err)
+	}
+
+	// ListRuns is newest first.
+	runs, err := d.ListRuns(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 2 || runs[0].Command != "again" {
+		t.Errorf("ListRuns = %+v", runs)
+	}
+
+	// RemoveRun deletes every record for the name.
+	n, err := d.RemoveRun("backfill")
+	if err != nil || n != 2 {
+		t.Fatalf("RemoveRun n=%d err=%v", n, err)
+	}
+	if _, ok, _ := d.GetRun("backfill"); ok {
+		t.Error("run still present after remove")
+	}
+}
+
+func TestRuns_UnattachedAndRunning(t *testing.T) {
+	d := openDB(t)
+	// Unattached run (empty address) is allowed and independent of attached ones.
+	if _, err := d.AddRun("adhoc", "", "true", "/tmp", time.Now()); err != nil {
+		t.Fatalf("unattached AddRun: %v", err)
+	}
+	if _, err := d.AddRun("adhoc2", "app", "true", "/work", time.Now()); err != nil {
+		t.Fatalf("attached AddRun: %v", err)
+	}
+	running, err := d.RunningRuns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(running) != 2 {
+		t.Errorf("RunningRuns = %d, want 2", len(running))
+	}
+}
+
 func TestSetStopped(t *testing.T) {
 	d := openDB(t)
 	p := db.Project{Name: "app", SpecPath: "github.com/x/app", Ref: "main"}

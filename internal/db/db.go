@@ -66,6 +66,25 @@ CREATE TABLE IF NOT EXISTS task_runs (
 -- The ux_task_runs_running partial unique index (hard no-overlap: at most one
 -- 'running' row per address+task) is created in migrate(), which first collapses
 -- any pre-existing duplicate 'running' rows an older build may have left behind.
+
+-- One row per managed run: an imperative, run-once, durable host operation
+-- (nexus run). address is the owning project ('' = unattached). status starts
+-- 'running' and is finalised on exit; a run is never restarted.
+CREATE TABLE IF NOT EXISTS runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    address     TEXT NOT NULL DEFAULT '',  -- owning project address; '' = unattached
+    command     TEXT NOT NULL,
+    workdir     TEXT NOT NULL,
+    status      TEXT NOT NULL CHECK(status IN ('running','success','failed')),
+    exit_code   INTEGER,
+    started_at  INTEGER NOT NULL,
+    finished_at INTEGER
+);
+-- Hard no-overlap: at most one 'running' run per name. A brand-new table in this
+-- version, so (unlike task_runs) the index is safe to create directly here — no
+-- older build ever wrote rows that could already collide.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_runs_running ON runs(name) WHERE status = 'running';
 `
 
 // DB wraps a SQLite connection with nexus-specific operations.
@@ -353,6 +372,130 @@ func scanTaskRuns(rows *sql.Rows) ([]TaskRun, error) {
 		var started int64
 		var finished *int64
 		if err := rows.Scan(&r.ID, &r.Address, &r.Task, &r.Reason, &r.Status, &exit, &started, &finished); err != nil {
+			return nil, err
+		}
+		r.StartedAt = time.Unix(started, 0)
+		if exit != nil {
+			e := int(*exit)
+			r.ExitCode = &e
+		}
+		if finished != nil {
+			t := time.Unix(*finished, 0)
+			r.FinishedAt = &t
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// --- managed runs (nexus run) ---
+
+// Run is one managed run: an imperative, run-once, durable host operation.
+type Run struct {
+	ID         int64
+	Name       string
+	Address    string // owning project; "" = unattached
+	Command    string
+	WorkDir    string
+	Status     string // running | success | failed
+	ExitCode   *int
+	StartedAt  time.Time
+	FinishedAt *time.Time
+}
+
+// ErrRunActive is returned by AddRun when a run with the same name is already in
+// progress. The partial unique index makes this a hard, atomic guarantee.
+var ErrRunActive = errors.New("a run with this name is already in progress")
+
+// AddRun records the start of a managed run (status 'running') and returns its ID.
+// Returns ErrRunActive if a run with the same name is already in progress.
+func (d *DB) AddRun(name, address, command, workdir string, startedAt time.Time) (int64, error) {
+	res, err := d.conn.Exec(
+		`INSERT INTO runs (name, address, command, workdir, status, started_at) VALUES (?, ?, ?, ?, 'running', ?)`,
+		name, address, command, workdir, startedAt.Unix(),
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return 0, ErrRunActive
+		}
+		return 0, fmt.Errorf("add run: %w", err)
+	}
+	return res.LastInsertId()
+}
+
+// FinishRun finalises a managed run with its outcome and exit code.
+func (d *DB) FinishRun(id int64, status string, exitCode int, finishedAt time.Time) error {
+	_, err := d.conn.Exec(
+		`UPDATE runs SET status = ?, exit_code = ?, finished_at = ? WHERE id = ?`,
+		status, exitCode, finishedAt.Unix(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("finish run %d: %w", id, err)
+	}
+	return nil
+}
+
+// GetRun returns the most recent run with the given name, and whether one exists.
+func (d *DB) GetRun(name string) (Run, bool, error) {
+	rows, err := d.conn.Query(
+		`SELECT id, name, address, command, workdir, status, exit_code, started_at, finished_at
+		 FROM runs WHERE name = ? ORDER BY id DESC LIMIT 1`, name,
+	)
+	if err != nil {
+		return Run{}, false, fmt.Errorf("get run: %w", err)
+	}
+	defer rows.Close()
+	out, err := scanRuns(rows)
+	if err != nil || len(out) == 0 {
+		return Run{}, false, err
+	}
+	return out[0], true, nil
+}
+
+// ListRuns returns up to limit managed runs, newest first.
+func (d *DB) ListRuns(limit int) ([]Run, error) {
+	rows, err := d.conn.Query(
+		`SELECT id, name, address, command, workdir, status, exit_code, started_at, finished_at
+		 FROM runs ORDER BY started_at DESC, id DESC LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list runs: %w", err)
+	}
+	defer rows.Close()
+	return scanRuns(rows)
+}
+
+// RunningRuns returns every managed run still marked 'running' — the runtime
+// re-polls nexus-pm for each on startup to finalise runs left in flight.
+func (d *DB) RunningRuns() ([]Run, error) {
+	rows, err := d.conn.Query(
+		`SELECT id, name, address, command, workdir, status, exit_code, started_at, finished_at
+		 FROM runs WHERE status = 'running' ORDER BY id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("running runs: %w", err)
+	}
+	defer rows.Close()
+	return scanRuns(rows)
+}
+
+// RemoveRun deletes a run's records by name, returning how many rows were removed.
+func (d *DB) RemoveRun(name string) (int64, error) {
+	res, err := d.conn.Exec(`DELETE FROM runs WHERE name = ?`, name)
+	if err != nil {
+		return 0, fmt.Errorf("remove run %q: %w", name, err)
+	}
+	return res.RowsAffected()
+}
+
+func scanRuns(rows *sql.Rows) ([]Run, error) {
+	var out []Run
+	for rows.Next() {
+		var r Run
+		var exit *int64
+		var started int64
+		var finished *int64
+		if err := rows.Scan(&r.ID, &r.Name, &r.Address, &r.Command, &r.WorkDir, &r.Status, &exit, &started, &finished); err != nil {
 			return nil, err
 		}
 		r.StartedAt = time.Unix(started, 0)
