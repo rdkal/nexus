@@ -106,7 +106,8 @@
 | `nexus run list` / `rm`; socket endpoints on `nexus.sock` (`POST/GET /runs`, `GET /runs/<name>/log`, `DELETE /runs/<name>`) | ✅ | ✅ | ✅ |
 | No-overlap — a live run `name` is unique (partial unique index on `running`), same hard DB guarantee as tasks | ✅ | ✅ | ✅ |
 | `nexus run stop <name>` — SIGTERM→SIGKILL a running run via a new nexus-pm `POST /run/<id>/stop`; recorded as failed | ✅ | ✅ | ✅ |
-| Web docs — a "Managed runs" section on the docs site (docs-src/build.py), like the Tasks section | | | |
+| Web docs — a "Managed runs" section on the docs site (docs-src/build.py), like the Tasks section | ✅ | ✅ | ✅ |
+| Distinct `cancelled`/`stopped` run status — a stopped (or interrupted) run currently records as `failed`; give it its own terminal status (needs a `runs.status` CHECK-constraint change → SQLite table-rebuild migration) | | | |
 | `--project <address>` override for the cross-directory case | ✅ | | |
 | `nexus run logs -f` follow | | | |
 | Web UI — a Runs section on the project detail page (later) | | | |

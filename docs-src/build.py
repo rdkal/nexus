@@ -92,6 +92,16 @@ tasks:
     run: ./migrate.sh         # no trigger -> manual only (nexus task run app/migrate)
 """
 
+RUN_EXAMPLE = """\
+# Start a long-running one-shot operation on the host — supervised and logged.
+nexus run backfill-2024 -- ./scripts/backfill.sh --year 2024
+
+nexus run list            # name, project, status
+nexus run logs backfill-2024
+nexus run stop backfill-2024   # signal it to stop
+nexus run rm backfill-2024     # forget a finished run
+"""
+
 WEB_UI = """\
 nexus project add github.com/rdkal/nexus/web
 """
@@ -129,6 +139,9 @@ nexus project start <name|address>              resume from the last deployed SH
 nexus project remove <name>                     forget a root project (stops it too)
 nexus service stop <address> <service>          pause one service inside a project
 nexus service start <address> <service>         resume a paused service
+nexus task run <project>/<task>                 trigger a task now
+nexus run <name> -- <command>                   start a durable, run-once host operation
+nexus run list | logs <name> | stop <name> | rm <name>
 nexus version                                   print the installed version
 """
 
@@ -224,6 +237,28 @@ def page():
                     " button — which reads ",
                     h.strong["Retry"],
                     " on a task whose last run failed, so you can re-run it with one click.",
+                ],
+                h.h2["Managed runs"],
+                h.p[
+                    "Tasks and services come from git. For a one-off long operation you want to "
+                    "kick off ",
+                    h.em["from the host"],
+                    " — a data backfill, a migration, a bulk import — use a ",
+                    h.strong["managed run"],
+                    ". It runs in the background, supervised and logged, and its outcome is "
+                    "recorded; it survives a nexus runtime self-update (it runs under the process "
+                    "manager, not the runtime).",
+                ],
+                code(RUN_EXAMPLE),
+                h.p[
+                    "The owning project is inferred from the directory you launch it in — the one "
+                    "whose ",
+                    h.code["nexus.yaml"],
+                    " lives there — so the run inherits that project's environment and volumes, "
+                    "and its log lands under that project. A run is ",
+                    h.strong["run-once"],
+                    ": it is never restarted, and stopping it (or an interrupted host reboot) "
+                    "records it as failed rather than silently re-running it.",
                 ],
                 h.h2["Environment variables"],
                 h.p[

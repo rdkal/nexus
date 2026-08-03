@@ -658,7 +658,13 @@ web-v*     newest tag matching a glob — one app in a monorepo</pre></div><h2>T
     run: ./report.sh
 
   migrate:
-    run: ./migrate.sh         # no trigger -&gt; manual only (nexus task run app/migrate)</pre></div><p>Every run is recorded with its outcome. The dashboard lists a project&#39;s tasks with each one&#39;s trigger and last-run status, and a <strong>Run</strong> button — which reads <strong>Retry</strong> on a task whose last run failed, so you can re-run it with one click.</p><h2>Environment variables</h2><p>Set variables at three levels — project-wide (build and every service), per service (most specific wins), and on a <code>projects:</code> entry (the composer configuring a nested sub-project). Docker-compose syntax: a map, or a <code>- KEY=value</code> list.</p><div class="panel"><pre class="code"># Project-wide — applies to the build and every service.
+    run: ./migrate.sh         # no trigger -&gt; manual only (nexus task run app/migrate)</pre></div><p>Every run is recorded with its outcome. The dashboard lists a project&#39;s tasks with each one&#39;s trigger and last-run status, and a <strong>Run</strong> button — which reads <strong>Retry</strong> on a task whose last run failed, so you can re-run it with one click.</p><h2>Managed runs</h2><p>Tasks and services come from git. For a one-off long operation you want to kick off <em>from the host</em> — a data backfill, a migration, a bulk import — use a <strong>managed run</strong>. It runs in the background, supervised and logged, and its outcome is recorded; it survives a nexus runtime self-update (it runs under the process manager, not the runtime).</p><div class="panel"><pre class="code"># Start a long-running one-shot operation on the host — supervised and logged.
+nexus run backfill-2024 -- ./scripts/backfill.sh --year 2024
+
+nexus run list            # name, project, status
+nexus run logs backfill-2024
+nexus run stop backfill-2024   # signal it to stop
+nexus run rm backfill-2024     # forget a finished run</pre></div><p>The owning project is inferred from the directory you launch it in — the one whose <code>nexus.yaml</code> lives there — so the run inherits that project&#39;s environment and volumes, and its log lands under that project. A run is <strong>run-once</strong>: it is never restarted, and stopping it (or an interrupted host reboot) records it as failed rather than silently re-running it.</p><h2>Environment variables</h2><p>Set variables at three levels — project-wide (build and every service), per service (most specific wins), and on a <code>projects:</code> entry (the composer configuring a nested sub-project). Docker-compose syntax: a map, or a <code>- KEY=value</code> list.</p><div class="panel"><pre class="code"># Project-wide — applies to the build and every service.
 environment:
   LOG_LEVEL: info
 
@@ -682,4 +688,7 @@ nexus project start &lt;name|address&gt;              resume from the last deplo
 nexus project remove &lt;name&gt;                     forget a root project (stops it too)
 nexus service stop &lt;address&gt; &lt;service&gt;          pause one service inside a project
 nexus service start &lt;address&gt; &lt;service&gt;         resume a paused service
+nexus task run &lt;project&gt;/&lt;task&gt;                 trigger a task now
+nexus run &lt;name&gt; -- &lt;command&gt;                   start a durable, run-once host operation
+nexus run list | logs &lt;name&gt; | stop &lt;name&gt; | rm &lt;name&gt;
 nexus version                                   print the installed version</pre></div></div></div></body></html>
