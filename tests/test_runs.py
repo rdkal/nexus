@@ -44,6 +44,17 @@ def test_run_completes_and_captures_log(nexus):
     assert "RUN_MARKER" in nexus.client.run_log("hello")
 
 
+def test_run_preserves_shell_quoting(nexus):
+    # Regression for #81: quoting after `--` must survive to the run command, so
+    # the captured output is exactly the three lines (no corrupted/blank first
+    # line from a flattened `/bin/sh -c echo L1; ...`).
+    nexus.start(poll_interval="2s")
+    nexus.wait_for_socket()
+    nexus.cli("run", "quoted", "--", "/bin/sh", "-c", "echo L1; echo L2; echo L3")
+    assert _wait_run(nexus, "quoted", status="success"), "run did not succeed"
+    assert nexus.client.run_log("quoted") == "L1\nL2\nL3\n"
+
+
 def test_run_stop(nexus):
     nexus.start(poll_interval="2s")
     nexus.wait_for_socket()

@@ -222,6 +222,40 @@ func taskListCmd(homeFlag *string) *cobra.Command {
 	}
 }
 
+// shJoin turns the argv after `--` into a single command string that nexus-pm's
+// `sh -c` re-parses back into the same argv. Each token is POSIX-quoted, so shell
+// metacharacters the user quoted (`nexus run t1 -- /bin/sh -c 'echo a; echo b'`)
+// survive instead of being flattened by a naive space-join (which would corrupt
+// the command — e.g. dropping the first echo's argument).
+func shJoin(args []string) string {
+	parts := make([]string, len(args))
+	for i, a := range args {
+		parts[i] = shQuote(a)
+	}
+	return strings.Join(parts, " ")
+}
+
+// shQuote POSIX-quotes a single argument. A token of only safe characters is left
+// as-is for readability; anything else is wrapped in single quotes with embedded
+// quotes escaped as '\”.
+func shQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	safe := true
+	for _, r := range s {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			strings.ContainsRune("@%_+=:,./-", r)) {
+			safe = false
+			break
+		}
+	}
+	if safe {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // runCmd is `nexus run` — start a durable, run-once host operation — plus its
 // list/logs/rm subcommands. The owning project is inferred from the working
 // directory server-side.
@@ -240,7 +274,7 @@ func runCmd(homeFlag *string) *cobra.Command {
 				return fmt.Errorf("usage: nexus run <name> -- <command>")
 			}
 			name := args[0]
-			command := strings.Join(args[dash:], " ")
+			command := shJoin(args[dash:])
 			if strings.TrimSpace(command) == "" {
 				return fmt.Errorf("usage: nexus run <name> -- <command>")
 			}
