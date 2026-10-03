@@ -49,6 +49,21 @@ type Deployer struct {
 	WorktreeAdd    func(repoDir, worktreePath, sha string) error
 	WorktreeRemove func(repoDir, worktreePath string) error
 
+	// WorktreeInUse reports whether a deployment other than this one is running
+	// from worktreePath, in which case this deploy must not remove it.
+	//
+	// Worktree paths are keyed by root spec path, alias chain and SHA, so two ROOT
+	// projects of the same repo — a repo holding two apps in subdirectories, each
+	// added separately — resolve to the same path whenever they sit on the same
+	// SHA. Moving one of them to a new SHA then cleans up a checkout the other is
+	// still running from: its services survive on the deleted inodes, but anything
+	// that reads a path under the worktree afterwards fails, with nothing in that
+	// project's own logs to say why.
+	//
+	// Nil means "nothing else is using it", which is correct for a single project
+	// and keeps the zero value of Deployer behaving as before.
+	WorktreeInUse func(worktreePath string) bool
+
 	// Injectable config loader. Nil reads nexus.yaml from the worktree root.
 	LoadConfig func(worktreePath string) (*config.ProjectFile, error)
 
@@ -130,6 +145,10 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 	if worktreeRemove == nil {
 		worktreeRemove = git.WorktreeRemove
 	}
+	worktreeInUse := d.WorktreeInUse
+	if worktreeInUse == nil {
+		worktreeInUse = func(string) bool { return false }
+	}
 	loadConfig := d.LoadConfig
 	if loadConfig == nil {
 		loadConfig = func(wt string) (*config.ProjectFile, error) {
@@ -159,11 +178,21 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 	sameWorktree := prevWorktree != "" && newWorktree == prevWorktree
 
 	// removeNewWorktree discards the new worktree on an abort path — but never when
-	// it is the same worktree the current services are running from (same-SHA redeploy).
+	// it is the same worktree the current services are running from (same-SHA redeploy),
+	// and never when another project is deployed from it. WorktreeAdd is idempotent and
+	// reuses an existing checkout, so a second project arriving at a SHA another is
+	// already on shares that worktree rather than making its own; a failed build here
+	// must not take the other project's checkout with it.
 	removeNewWorktree := func() {
-		if !sameWorktree {
-			_ = worktreeRemove(repoDir, newWorktree)
+		if sameWorktree {
+			return
 		}
+		if worktreeInUse(newWorktree) {
+			slog.Info("deploy: keeping new worktree, another deployment is running from it",
+				"address", req.Address, "path", newWorktree)
+			return
+		}
+		_ = worktreeRemove(repoDir, newWorktree)
 	}
 
 	// FETCH: download objects from origin.
@@ -277,7 +306,10 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) error {
 	// CLEANUP: discard the old worktree now that services are running from the new one.
 	// Skipped on a same-SHA redeploy — the "old" worktree is the live one.
 	if prevWorktree != "" && !sameWorktree {
-		if err := worktreeRemove(repoDir, prevWorktree); err != nil {
+		if worktreeInUse(prevWorktree) {
+			slog.Info("deploy: keeping old worktree, another deployment is running from it",
+				"address", req.Address, "path", prevWorktree)
+		} else if err := worktreeRemove(repoDir, prevWorktree); err != nil {
 			slog.Warn("deploy: cleanup old worktree failed", "path", prevWorktree, "err", err)
 		}
 	}

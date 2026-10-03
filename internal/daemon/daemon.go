@@ -478,6 +478,10 @@ func (d *Daemon) deployLoop(ctx context.Context, ps *projectState) {
 		DB:    d.DB,
 		Sup:   d.Sup,
 		Paths: d.Paths,
+		// A Deployer belongs to one project's deploy loop, so the project to ignore
+		// is fixed: itself. Everything else deployed from the same path is a reason
+		// not to remove it.
+		WorktreeInUse: func(path string) bool { return d.worktreeInUse(path, ps.address) },
 	}
 
 	// A failed deploy is retried with exponential backoff (capped) rather than
@@ -919,6 +923,40 @@ func (d *Daemon) InjectProject(name string, cfg *config.ProjectFile, sha string)
 	d.mu.Lock()
 	d.projects[name] = ps
 	d.mu.Unlock()
+}
+
+// worktreeInUse reports whether a project other than exceptAddress is currently
+// deployed from worktreePath.
+//
+// Worktree paths are keyed by root spec path, alias chain and SHA, not by project,
+// so two root projects of the same repo — one repo holding two apps in
+// subdirectories — share a path whenever they are on the same SHA. Without this
+// check, moving one to a new SHA deletes the checkout the other is still running
+// from. The surviving process keeps going on the deleted inodes, so the damage is
+// silent until something reads a path under the worktree: a task with the worktree
+// as its working directory, or a service that shells out to a script inside it.
+func (d *Daemon) worktreeInUse(worktreePath, exceptAddress string) bool {
+	if worktreePath == "" {
+		return false
+	}
+	d.mu.RLock()
+	states := make([]*projectState, 0, len(d.projects))
+	for addr, ps := range d.projects {
+		if addr != exceptAddress {
+			states = append(states, ps)
+		}
+	}
+	d.mu.RUnlock()
+
+	for _, ps := range states {
+		ps.mu.RLock()
+		wt := ps.worktree
+		ps.mu.RUnlock()
+		if wt == worktreePath {
+			return true
+		}
+	}
+	return false
 }
 
 func serviceKey(address, service string) string { return address + "/" + service }

@@ -1032,6 +1032,18 @@ request's alias chain. Root projects persist their active SHA in the `projects` 
 are not stored there (they are discovered from a parent's config, not managed independently),
 so their active SHA is derived from the latest `active` row in the `deployments` table.
 
+**Two root projects of one repo share a worktree.** A worktree path is keyed by root spec path,
+alias chain and SHA — not by project — so one repo holding two apps in subdirectories, each added
+as its own root project, resolves to the same `repos/<spec>/worktrees/<sha>` whenever both sit on
+the same SHA. That sharing is intended and harmless: `WorktreeAdd` is idempotent, and at one SHA
+the checkout is identical whoever made it. What is not harmless is cleanup. When one of them moves
+to a new SHA, its deploy would remove the old worktree the other is still running from; the running
+process survives on the deleted inodes, so nothing fails at the moment of deletion and nothing
+appears in that project's log. It surfaces later, wherever a path under the worktree is read — a
+task whose working directory is gone, or a service shelling out to a script inside it. The deployer
+therefore asks `WorktreeInUse` before removing any worktree, on both the cleanup and the abort
+paths, and the daemon answers it by looking for another project deployed from that same path.
+
 **Inline sub-projects.** A `projects:` entry without a `src:` is inline: it shares the parent's
 worktree and deploys atomically with it, rather than getting its own repo, ref, and poller. At
 deploy time the parent's config is *flattened* into units — the parent plus every inline
