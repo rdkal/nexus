@@ -575,3 +575,106 @@ func must(t *testing.T, err error) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// Two root projects of the same repo resolve to one worktree path whenever they sit
+// on the same SHA, because the path is keyed by root spec path, alias chain and SHA
+// and not by project. Moving one of them on must then leave the other's checkout
+// alone: its services survive a deleted worktree on the open inodes, so the breakage
+// is silent until something reads a path under it.
+func TestDeploy_KeepsPreviousWorktreeAnotherProjectIsUsing(t *testing.T) {
+	cfg := &config.ProjectFile{
+		Build:    "make build",
+		Services: map[string]config.Service{"api": {Run: "python api.py"}},
+	}
+	sup := &mockSupervisor{}
+	dep := newDeployer(t, sup, cfg, nil)
+	must(t, dep.DB.(*db.DB).AddProject(db.Project{
+		Name: "recorder", SpecPath: "github.com/myorg/two-apps", Ref: "@main", CurrentSHA: "old111",
+	}))
+
+	var removed []string
+	dep.WorktreeRemove = func(_, path string) error { removed = append(removed, path); return nil }
+	prev := dep.Paths.WorktreeDir("github.com/myorg/two-apps", nil, "old111")
+	dep.WorktreeInUse = func(path string) bool { return path == prev }
+
+	must(t, dep.Deploy(context.Background(), lifecycle.Request{
+		Name: "recorder", Address: "recorder", Ref: "@main",
+		SpecPath: "github.com/myorg/two-apps", RootSpecPath: "github.com/myorg/two-apps",
+		Subdir: "recorder", NewSHA: "new222", PrevSHA: "old111", PrevConfig: cfg,
+	}))
+
+	for _, p := range removed {
+		if p == prev {
+			t.Fatalf("removed the worktree another project is deployed from: %s", p)
+		}
+	}
+}
+
+// The guard must not stop ordinary cleanup: with nothing else on the old worktree it
+// is still removed, or every deploy would leak a checkout.
+func TestDeploy_RemovesPreviousWorktreeWhenUnused(t *testing.T) {
+	cfg := &config.ProjectFile{
+		Build:    "make build",
+		Services: map[string]config.Service{"api": {Run: "python api.py"}},
+	}
+	sup := &mockSupervisor{}
+	dep := newDeployer(t, sup, cfg, nil)
+	must(t, dep.DB.(*db.DB).AddProject(db.Project{
+		Name: "solo", SpecPath: "github.com/myorg/solo", Ref: "@main", CurrentSHA: "old111",
+	}))
+
+	var removed []string
+	dep.WorktreeRemove = func(_, path string) error { removed = append(removed, path); return nil }
+	dep.WorktreeInUse = func(string) bool { return false }
+
+	must(t, dep.Deploy(context.Background(), lifecycle.Request{
+		Name: "solo", Address: "solo", Ref: "@main",
+		SpecPath: "github.com/myorg/solo", RootSpecPath: "github.com/myorg/solo",
+		NewSHA: "new222", PrevSHA: "old111", PrevConfig: cfg,
+	}))
+
+	prev := dep.Paths.WorktreeDir("github.com/myorg/solo", nil, "old111")
+	var sawPrev bool
+	for _, p := range removed {
+		if p == prev {
+			sawPrev = true
+		}
+	}
+	if !sawPrev {
+		t.Fatalf("old worktree was not cleaned up; removed=%v want %s", removed, prev)
+	}
+}
+
+// WorktreeAdd is idempotent and reuses an existing checkout, so a project arriving at
+// a SHA another is already on shares that worktree. A build failure here aborts this
+// deploy and must not take the other project's checkout with it.
+func TestDeploy_BuildFailureKeepsSharedNewWorktree(t *testing.T) {
+	cfg := &config.ProjectFile{
+		Build:    "make build",
+		Services: map[string]config.Service{"api": {Run: "python api.py"}},
+	}
+	sup := &mockSupervisor{}
+	dep := newDeployer(t, sup, cfg, errors.New("build failed"))
+	must(t, dep.DB.(*db.DB).AddProject(db.Project{
+		Name: "trader", SpecPath: "github.com/myorg/two-apps", Ref: "@main",
+	}))
+
+	var removed []string
+	dep.WorktreeRemove = func(_, path string) error { removed = append(removed, path); return nil }
+	shared := dep.Paths.WorktreeDir("github.com/myorg/two-apps", nil, "new222")
+	dep.WorktreeInUse = func(path string) bool { return path == shared }
+
+	err := dep.Deploy(context.Background(), lifecycle.Request{
+		Name: "trader", Address: "trader", Ref: "@main",
+		SpecPath: "github.com/myorg/two-apps", RootSpecPath: "github.com/myorg/two-apps",
+		Subdir: "trader", NewSHA: "new222",
+	})
+	if err == nil {
+		t.Fatal("expected a build failure")
+	}
+	for _, p := range removed {
+		if p == shared {
+			t.Fatalf("a failed build removed the worktree another project is deployed from: %s", p)
+		}
+	}
+}
